@@ -1,0 +1,14 @@
+# 数据库与运行时文件
+server/storage/*
+!server/storage/.gitkeep
+server/config.local.php
+*.db
+*.db-wal
+*.db-shm
+*.log
+
+# 编辑器 / 系统
+.DS_Store
+.idea/
+.vscode/
+node_modules/
