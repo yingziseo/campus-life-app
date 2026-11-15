@@ -1,0 +1,11 @@
+{
+  "name": "campus-life-e2e",
+  "private": true,
+  "description": "浏览器端到端测试（需先启动预览服务并重置演示数据）",
+  "scripts": {
+    "test": "node pages.js && node flows.js"
+  },
+  "devDependencies": {
+    "playwright-core": "1.49.1"
+  }
+}

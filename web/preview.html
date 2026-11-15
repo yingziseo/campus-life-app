@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>校园生活 · 原型预览</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22%3E%3Crect width=%2264%22 height=%2264%22 rx=%2216%22 fill=%22%23ff6a2b%22/%3E%3Ctext x=%2232%22 y=%2244%22 font-size=%2234%22 text-anchor=%22middle%22 fill=%22white%22 font-weight=%22700%22%3E%E6%A0%A1%3C/text%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #eef0f4; --panel: #ffffff; --ink: #1d1f23; --ink-2: #5b6170; --ink-3: #9aa0ad; --line: #e3e6ec;
+    --student: #ff6a2b; --merchant: #2f6bff; --manager: #7048e8;
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif; color: var(--ink);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { background: radial-gradient(1200px 600px at 70% 10%, #f8f9fb, var(--bg)); display: flex; align-items: center; justify-content: center; gap: 48px; padding: 24px; min-height: 100vh; }
+
+  .panel { width: 320px; flex: none; display: flex; flex-direction: column; gap: 14px; max-height: calc(100vh - 48px); overflow-y: auto; }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .brand .logo { width: 44px; height: 44px; border-radius: 12px; background: var(--student); color: #fff; font-weight: 800; font-size: 20px; display: flex; align-items: center; justify-content: center; }
+  .brand h1 { margin: 0; font-size: 20px; }
+  .brand p { margin: 0; font-size: 12px; color: var(--ink-3); }
+  .box { background: var(--panel); border-radius: 14px; padding: 14px; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+  .box h2 { margin: 0 0 10px; font-size: 13px; color: var(--ink-2); font-weight: 600; }
+  .roles { display: grid; gap: 8px; }
+  .role { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; border: 2px solid var(--line); background: #fff; cursor: pointer; text-align: left; font: inherit; color: inherit; }
+  .role .dot { width: 30px; height: 30px; border-radius: 9px; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; flex: none; }
+  .role b { display: block; font-size: 14px; }
+  .role small { color: var(--ink-3); font-size: 12px; }
+  .role.on { border-color: var(--c); background: color-mix(in srgb, var(--c) 6%, #fff); }
+  .links { display: flex; flex-wrap: wrap; gap: 6px; }
+  .links button { height: 28px; padding: 0 10px; border-radius: 14px; border: 1px solid var(--line); background: #fff; font: inherit; font-size: 12px; color: var(--ink-2); cursor: pointer; }
+  .links button:hover { border-color: var(--c, var(--student)); color: var(--c, var(--student)); }
+  .meta { font-size: 12px; color: var(--ink-2); line-height: 1.8; }
+  .meta code { background: #f3f4f7; padding: 1px 6px; border-radius: 4px; font-size: 12px; }
+  .route { font-family: ui-monospace, Menlo, monospace; font-size: 12px; background: #f3f4f7; padding: 6px 8px; border-radius: 6px; word-break: break-all; color: var(--ink-2); }
+  .actions { display: flex; gap: 8px; }
+  .actions button { flex: 1; height: 34px; border-radius: 8px; border: 1px solid var(--line); background: #fff; font: inherit; font-size: 13px; cursor: pointer; }
+  .actions button.danger { color: #e11d48; }
+
+  /* 9:16 手机框 */
+  .phone-wrap { flex: none; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  .phone { --h: min(calc(100vh - 80px), 860px); height: var(--h); aspect-ratio: 9 / 16; background: #111; border-radius: calc(var(--h) * .065); padding: calc(var(--h) * .014); box-shadow: 0 30px 60px rgba(20,24,40,.25), 0 0 0 2px #2b2d33 inset; position: relative; }
+  .screen { width: 100%; height: 100%; border-radius: calc(var(--h) * .052); overflow: hidden; background: #fff; display: flex; flex-direction: column; position: relative; }
+  .status { height: 30px; flex: none; display: flex; align-items: center; justify-content: space-between; padding: 0 22px 0 26px; font-size: 13px; font-weight: 600; background: var(--status-bg, #fff); color: var(--status-ink, #111); transition: background .2s; }
+  .status .island { position: absolute; left: 50%; top: 7px; transform: translateX(-50%); width: 28%; height: 20px; border-radius: 12px; background: #111; }
+  .status .icons { display: flex; gap: 5px; align-items: center; }
+  .bat { width: 22px; height: 11px; border: 1.5px solid currentColor; border-radius: 3px; position: relative; padding: 1px; }
+  .bat::before { content: ""; display: block; height: 100%; width: 80%; background: currentColor; border-radius: 1px; }
+  .bat::after { content: ""; position: absolute; right: -4px; top: 3px; width: 2px; height: 4px; background: currentColor; border-radius: 0 1px 1px 0; }
+  iframe { flex: 1; width: 100%; border: 0; display: block; background: #f4f5f7; }
+  .caption { font-size: 12px; color: var(--ink-3); }
+
+  @media (max-width: 760px) {
+    body { padding: 0; display: block; }
+    .panel { display: none; }
+    .phone-wrap { height: 100vh; }
+    .phone { --h: 100vh; width: 100%; height: 100vh; aspect-ratio: auto; border-radius: 0; padding: 0; box-shadow: none; }
+    .screen { border-radius: 0; }
+    .status, .caption { display: none; }
+  }
+</style>
+</head>
+<body>
+  <aside class="panel">
+    <div class="brand"><div class="logo">校</div><div><h1>校园生活 · 原型预览</h1><p>v0.1 · 试点：青岛理工职业学院 · 演示数据均为虚构</p></div></div>
+
+    <div class="box">
+      <h2>切换身份</h2>
+      <div class="roles">
+        <button class="role" data-role="student" style="--c:var(--student)"><span class="dot" style="background:var(--student)">学</span><span><b>学生端</b><small>跑腿 · 快递 · 二手 · 树洞 · 周边下单</small></span></button>
+        <button class="role" data-role="merchant" style="--c:var(--merchant)"><span class="dot" style="background:var(--merchant)">商</span><span><b>商家端</b><small>老王黄焖鸡 · 上架 · 核销 · 外卖备餐</small></span></button>
+        <button class="role" data-role="manager" style="--c:var(--manager)"><span class="dot" style="background:var(--manager)">经</span><span><b>客户经理端</b><small>邀请码 QD8801 · 审核商家 · 佣金</small></span></button>
+      </div>
+    </div>
+
+    <div class="box">
+      <h2>快速跳转</h2>
+      <div class="links" id="links"></div>
+    </div>
+
+    <div class="box">
+      <h2>推荐演示路线</h2>
+      <div class="meta">
+        1. 学生端 → 周边 → 老王黄焖鸡 → 购买团购（看"比美团省"）→ 模拟支付拿券码<br>
+        2. 商家端 → 核销 → 点击演示券码核销<br>
+        3. 客户经理端 → 概览佣金增加 → 审核「小李烧烤」<br>
+        4. 学生端 → 校园外卖下单选时间点 → 商家端外卖备餐
+      </div>
+    </div>
+
+    <div class="box">
+      <h2>当前页面</h2>
+      <div class="route" id="route">-</div>
+      <div class="meta" style="margin-top:8px">手机直接访问：<code id="url"></code></div>
+    </div>
+
+    <div class="actions">
+      <button id="reload">刷新页面</button>
+      <button id="reset" class="danger">重置演示数据</button>
+    </div>
+  </aside>
+
+  <div class="phone-wrap">
+    <div class="phone"><div class="screen">
+      <div class="status"><span id="clock">9:41</span><span class="island"></span><span class="icons">
+        <svg width="17" height="11" viewBox="0 0 17 11" fill="currentColor"><rect x="0" y="7" width="3" height="4" rx="1"/><rect x="4.5" y="5" width="3" height="6" rx="1"/><rect x="9" y="2.5" width="3" height="8.5" rx="1"/><rect x="13.5" y="0" width="3" height="11" rx="1"/></svg>
+        <span class="bat"></span></span></div>
+      <iframe id="frame" title="小程序预览"></iframe>
+    </div></div>
+    <div class="caption">9:16 手机模拟 · 页面结构与微信小程序一一对应</div>
+  </div>
+
+<script>
+  const frame = document.getElementById('frame');
+  const LINKS = {
+    student: [['首页', '/'], ['周边生活', '/local'], ['校园外卖', '/local?cat=takeout'], ['跑腿', '/errands?type=errand'], ['代取快递', '/errands?type=express'], ['二手', '/market'], ['树洞', '/treehole'], ['问一问 AI', '/ai'], ['我的订单', '/orders'], ['商家入驻', '/merchant-apply'], ['切换学校', '/school'], ['登录页', '/login']],
+    merchant: [['工作台', '/m'], ['商品管理', '/m/deals'], ['上架商品', '/m/deal/new'], ['券码核销', '/m/verify'], ['外卖订单', '/m/orders?type=takeout'], ['店铺设置', '/m/shop']],
+    manager: [['概览', '/g'], ['我的商家', '/g/merchants'], ['定价试算', '/g/calc'], ['佣金明细', '/g/commissions']],
+  };
+  const STATUS_BG = { student: '#ff6a2b', merchant: '#fff', manager: '#fff' };
+  let role = 'student';
+  try { role = localStorage.getItem('preview-role') || 'student'; } catch (e) {}
+
+  function setRole(r, path) {
+    role = r;
+    try { localStorage.setItem('preview-role', r); } catch (e) {}
+    document.querySelectorAll('.role').forEach((b) => b.classList.toggle('on', b.dataset.role === r));
+    const links = document.getElementById('links');
+    links.innerHTML = '';
+    links.style.setProperty('--c', `var(--${r})`);
+    LINKS[r].forEach(([t, p]) => {
+      const b = document.createElement('button');
+      b.textContent = t;
+      b.onclick = () => frame.contentWindow.postMessage({ type: 'campus-go', path: p }, '*');
+      links.appendChild(b);
+    });
+    frame.src = `/app/?as=${r}&t=${Date.now()}#${path || LINKS[r][0][1]}`;
+  }
+  document.querySelectorAll('.role').forEach((b) => (b.onclick = () => setRole(b.dataset.role)));
+  document.getElementById('reload').onclick = () => frame.contentWindow.location.reload();
+  document.getElementById('reset').onclick = async () => {
+    if (!confirm('重置后所有新增的数据都会被清空，确定吗？')) return;
+    const res = await fetch('/api/dev/reset', { method: 'POST' }).then((r) => r.json()).catch(() => ({ msg: '网络错误' }));
+    alert(res.code === 0 ? res.data.message : '重置失败：' + res.msg);
+    setRole(role);
+  };
+  window.addEventListener('message', (e) => {
+    if (e.data?.type !== 'campus-route') return;
+    document.getElementById('route').textContent = '#' + e.data.path + (e.data.role ? `  （${e.data.role}）` : '');
+    const status = document.querySelector('.status');
+    const brandTop = e.data.role === 'student' && (e.data.path === '/' || e.data.path === '');
+    status.style.setProperty('--status-bg', brandTop ? STATUS_BG.student : '#fff');
+    status.style.setProperty('--status-ink', brandTop ? '#fff' : '#111');
+  });
+  const tick = () => { const d = new Date(); document.getElementById('clock').textContent = d.getHours() + ':' + String(d.getMinutes()).padStart(2, '0'); };
+  tick(); setInterval(tick, 30000);
+  document.getElementById('url').textContent = location.origin + '/app/';
+  setRole(role);
+</script>
+</body>
+</html>

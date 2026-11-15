@@ -71,5 +71,6 @@ $r->get('/api/ai/hot',  [C\AiController::class, 'hot'], '');
 
 // 开发辅助
 $r->post('/api/dev/reset', [C\DevController::class, 'reset'], '');
+$r->get('/api/dev/coupons', [C\DevController::class, 'coupons'], 'merchant');
 
 return $r;

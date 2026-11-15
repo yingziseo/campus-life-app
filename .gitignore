@@ -12,3 +12,4 @@ server/config.local.php
 .idea/
 .vscode/
 node_modules/
+tests/e2e/shots/
