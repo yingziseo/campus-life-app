@@ -27,7 +27,7 @@ final class LocalController
             $params[] = "%$kw%";
         }
         $rows = Db::all(
-            "SELECT m.id, m.name, m.category, m.address, m.intro, m.distance_m, m.takeout_enabled,
+            "SELECT m.id, m.name, m.category, m.address, m.intro, m.distance_m, m.takeout_enabled, m.cover,
                     MIN(d.sale_price) AS min_price,
                     MAX(d.competitor_price - d.sale_price) AS max_saving,
                     COALESCE(SUM(d.sold), 0) AS sold
@@ -41,7 +41,7 @@ final class LocalController
     public function merchant(Request $req): array
     {
         $m = Db::one(
-            "SELECT id, school_id, name, category, address, phone, intro, distance_m, takeout_enabled FROM merchants WHERE id = ? AND status = 'approved'",
+            "SELECT id, school_id, name, category, address, phone, intro, distance_m, takeout_enabled, cover FROM merchants WHERE id = ? AND status = 'approved'",
             [(int) $req->params['id']]
         );
         if (!$m) {
@@ -66,6 +66,7 @@ final class LocalController
         if ($d['type'] === 'takeout') {
             $deal['delivery'] = (new SchoolController())->config(new Request('GET', '', params: ['id' => $d['school_id']]));
             $deal['delivery_fee'] = (int) \App\Services\Settings::get('delivery_fee');
+            $deal['cutoff_minutes'] = (int) \App\Services\Settings::get('takeout_cutoff_minutes');
         }
         return $deal;
     }
@@ -80,6 +81,7 @@ final class LocalController
                 'type'             => $d['type'],
                 'title'            => $d['title'],
                 'description'      => $d['description'],
+                'image'            => $d['image'] ?? null,
                 'pricing_mode'     => $d['pricing_mode'],
                 'competitor_price' => (int) $d['competitor_price'],
                 'list_price'       => (int) $d['list_price'],

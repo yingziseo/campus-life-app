@@ -54,7 +54,7 @@ final class OrderService
         }
 
         $data = [
-            'order_no'           => date('YmdHis') . random_int(1000, 9999),
+            'order_no'           => self::newOrderNo(),
             'school_id'          => $user['school_id'],
             'user_id'            => $user['id'],
             'merchant_id'        => $deal['merchant_id'],
@@ -180,23 +180,50 @@ final class OrderService
         });
     }
 
-    /** 外卖状态推进：paid → delivering → completed（送达时结算） */
-    public static function advanceTakeout(array $merchant, int $orderId): array
+    /** 商家出餐：paid → ready，等待外卖团队骑手按批次取餐 */
+    public static function markReady(array $merchant, int $orderId): array
     {
-        return Db::transaction(function () use ($merchant, $orderId) {
-            $order = self::find($orderId);
-            if (!$order || (int) $order['merchant_id'] !== (int) $merchant['id'] || $order['type'] !== 'takeout') {
-                throw new HttpException('订单不存在', 404);
+        $order = self::find($orderId);
+        if (!$order || (int) $order['merchant_id'] !== (int) $merchant['id'] || $order['type'] !== 'takeout') {
+            throw new HttpException('订单不存在', 404);
+        }
+        if ($order['status'] !== 'paid') {
+            throw new HttpException('当前状态不可出餐', 422);
+        }
+        Db::update('orders', ['status' => 'ready', 'ready_at' => now()], 'id = :id', ['id' => $orderId]);
+        return self::find($orderId);
+    }
+
+    /** 骑手取餐：ready → delivering（可批量，返回成功数量） */
+    public static function pickup(array $rider, array $orderIds): int
+    {
+        return Db::transaction(function () use ($rider, $orderIds) {
+            $n = 0;
+            foreach ($orderIds as $id) {
+                $n += Db::run(
+                    "UPDATE orders SET status = 'delivering', rider_id = ?, picked_at = ? WHERE id = ? AND type = 'takeout' AND status = 'ready' AND school_id = ?",
+                    [$rider['id'], now(), (int) $id, $rider['school_id']]
+                )->rowCount();
             }
-            if ($order['status'] === 'paid') {
-                Db::update('orders', ['status' => 'delivering'], 'id = :id', ['id' => $orderId]);
-            } elseif ($order['status'] === 'delivering') {
-                Db::update('orders', ['status' => 'completed', 'completed_at' => now()], 'id = :id', ['id' => $orderId]);
-                self::writeLedger($order, $order['quantity'], $order['quantity'], true);
-            } else {
-                throw new HttpException('当前状态不可操作', 422);
+            return $n;
+        });
+    }
+
+    /** 骑手送达：delivering → completed，写入分账（含骑手提成） */
+    public static function deliver(array $rider, array $orderIds): int
+    {
+        return Db::transaction(function () use ($rider, $orderIds) {
+            $n = 0;
+            foreach ($orderIds as $id) {
+                $order = self::find((int) $id);
+                if (!$order || $order['status'] !== 'delivering' || (int) $order['rider_id'] !== (int) $rider['id']) {
+                    continue;
+                }
+                Db::update('orders', ['status' => 'completed', 'completed_at' => now()], 'id = :id', ['id' => $order['id']]);
+                self::writeLedger($order, (int) $order['quantity'], (int) $order['quantity'], true);
+                $n++;
             }
-            return self::find($orderId);
+            return $n;
         });
     }
 
@@ -217,14 +244,15 @@ final class OrderService
         }
         Db::insert('ledger', $base + ['party_type' => 'platform', 'party_id' => null, 'amount' => $margin, 'kind' => 'margin', 'remark' => '商品差价']);
         if ($withDelivery) {
-            Db::insert('ledger', $base + ['party_type' => 'rider', 'party_id' => null, 'amount' => (int) $order['rider_commission'], 'kind' => 'delivery', 'remark' => '骑手提成 ' . $order['delivery_slot']]);
+            Db::insert('ledger', $base + ['party_type' => 'rider', 'party_id' => $order['rider_id'], 'amount' => (int) $order['rider_commission'], 'kind' => 'delivery', 'remark' => '配送提成 ' . $order['delivery_slot'] . ' ' . $order['delivery_point']]);
             Db::insert('ledger', $base + ['party_type' => 'platform', 'party_id' => null, 'amount' => $order['delivery_fee'] - $order['rider_commission'], 'kind' => 'delivery', 'remark' => '配送费结余']);
         }
     }
 
     public static function find(int $id): ?array
     {
-        $o = Db::one('SELECT o.*, m.name AS merchant_name, m.address AS merchant_address FROM orders o JOIN merchants m ON m.id = o.merchant_id WHERE o.id = ?', [$id]);
+        $o = Db::one('SELECT o.*, m.name AS merchant_name, m.address AS merchant_address, r.nickname AS rider_name
+            FROM orders o JOIN merchants m ON m.id = o.merchant_id LEFT JOIN users r ON r.id = o.rider_id WHERE o.id = ?', [$id]);
         if ($o) {
             $o['coupons'] = Db::all('SELECT code, status, used_at FROM coupons WHERE order_id = ? ORDER BY id', [$id]);
             $o['saved'] = $o['competitor_amount'] - $o['goods_amount'];
@@ -239,6 +267,15 @@ final class OrderService
             throw new HttpException('订单不存在', 404);
         }
         return $o;
+    }
+
+    /** 订单号：秒级时间 + 6 位随机数，冲突时重试 */
+    private static function newOrderNo(): string
+    {
+        do {
+            $no = date('YmdHis') . str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+        } while (Db::value('SELECT 1 FROM orders WHERE order_no = ?', [$no]));
+        return $no;
     }
 
     private static function newCouponCode(): string

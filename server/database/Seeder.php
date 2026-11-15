@@ -33,6 +33,7 @@ final class Seeder
             self::campus($sid, $u);
             $m = self::merchants($sid, $u);
             self::faqs($sid);
+            self::history($u, $m);
             self::orders($sid, $u, $m);
         });
     }
@@ -63,6 +64,8 @@ final class Seeder
             'student'  => ['13800000001', '小青同学', 'student', null],
             'merchant' => ['13800000002', '王老板', 'merchant', null],
             'manager'  => ['13800000003', '李经理', 'manager', 'QD8801'],
+            'rider'    => ['13800000004', '小刘', 'student', null],
+            'admin'    => ['13800000000', '平台管理员', 'admin', null],
             's2'       => ['13800000011', '阿杰', 'student', null],
             's3'       => ['13800000012', '晓雯', 'student', null],
             'o2'       => ['13800000021', '张老板', 'merchant', null],
@@ -76,6 +79,12 @@ final class Seeder
         foreach ($rows as $key => [$phone, $nick, $role, $code]) {
             $ids[$key] = Db::insert('users', ['phone' => $phone, 'nickname' => $nick, 'role' => $role, 'school_id' => $sid, 'invite_code' => $code]);
         }
+        Db::update('users', ['rider_status' => 'approved'], 'id = :id', ['id' => $ids['rider']]);
+        Db::update('users', ['rider_status' => 'pending'], 'id = :id', ['id' => $ids['s3']]);
+        // 第二位客户经理（尚未推广商家）
+        Db::insert('users', ['phone' => '13800000005', 'nickname' => '陈经理', 'role' => 'manager', 'school_id' => $sid, 'invite_code' => 'QD8802']);
+        // 学生申请开通的新学校
+        Db::insert('schools', ['name' => '青岛黄海学院', 'city' => '青岛', 'status' => 'applying', 'contact' => '微信 hh-2025（演示）']);
         return $ids;
     }
 
@@ -119,6 +128,13 @@ final class Seeder
         ];
         foreach ($posts as [$uid, $anon, $content, $tag, $likes]) {
             $pid = Db::insert('treehole_posts', ['school_id' => $sid, 'user_id' => $uid, 'anon_name' => $anon, 'content' => $content, 'tag' => $tag, 'like_count' => $likes]);
+            if ($tag === '吐槽') {
+                // 演示：一条被举报的帖子，等待后台复核
+                foreach ([$u['s2'], $u['student']] as $reporter) {
+                    Db::insert('treehole_reports', ['post_id' => $pid, 'user_id' => $reporter, 'reason' => '其他']);
+                }
+                Db::run('UPDATE treehole_posts SET report_count = 2 WHERE id = ?', [$pid]);
+            }
             if ($tag === '求助') {
                 Db::insert('treehole_comments', ['post_id' => $pid, 'user_id' => $u['s2'], 'anon_name' => '勇敢的海鸥', 'content' => '可以先在平台「问一问」里搜一下，有写流程']);
                 Db::run('UPDATE treehole_posts SET comment_count = 1 WHERE id = ?', [$pid]);
@@ -217,7 +233,75 @@ final class Seeder
             OrderService::verifyCoupon($merchant, $c['code']);
         }
         OrderService::pay($student, (int) OrderService::create($student, $m['hmj']['deals'][0], 1)['id']);
-        OrderService::pay($s2, (int) OrderService::create($s2, $m['hmj']['deals'][1], 1, ['delivery_slot' => '17:30', 'delivery_point' => '北区宿舍楼下'])['id']);
         OrderService::pay($student, (int) OrderService::create($student, $m['tea']['deals'][0], 1)['id']);
+
+        // 外卖：组成下一个送餐批次（多商家、多取餐点），部分已出餐，供骑手端演示
+        $s3 = Db::one('SELECT * FROM users WHERE id = ?', [$u['s3']]);
+        $mlt = Db::one('SELECT * FROM merchants WHERE id = ?', [$m['mlt']['id']]);
+        $slot = self::nextSlot($sid);
+        $take = static fn(array $user, int $dealId, string $point, int $qty = 1) =>
+            OrderService::pay($user, (int) OrderService::create($user, $dealId, $qty, ['delivery_slot' => $slot, 'delivery_point' => $point])['id']);
+        $o1 = $take($s2, $m['hmj']['deals'][1], '北区宿舍楼下');
+        $o2 = $take($s3, $m['hmj']['deals'][2], '东门取餐柜');
+        $o3 = $take($s3, $m['mlt']['deals'][1], '东门取餐柜', 2);
+        $take($student, $m['mlt']['deals'][1], '图书馆门口');
+        OrderService::markReady($merchant, (int) $o1['id']);
+        OrderService::markReady($merchant, (int) $o2['id']);
+        OrderService::markReady($mlt, (int) $o3['id']);
+
+        // 一单已完成的外卖（骑手已有收入记录）
+        $rider = Db::one('SELECT * FROM users WHERE id = ?', [$u['rider']]);
+        $done = $take($s2, $m['mlt']['deals'][1], '北区宿舍楼下');
+        OrderService::markReady($mlt, (int) $done['id']);
+        OrderService::pickup($rider, [$done['id']]);
+        OrderService::deliver($rider, [$done['id']]);
+
+        Db::insert('ai_logs', ['user_id' => $u['s2'], 'school_id' => $sid, 'question' => '学校有没有游泳馆？', 'answer' => '（未命中）', 'source' => 'none']);
+    }
+
+    /** 过去 6 天的历史成交（走真实下单→支付→核销流程，再把时间回拨），让看板趋势有数据 */
+    private static function history(array $u, array $m): void
+    {
+        $buyers = array_map(static fn($k) => Db::one('SELECT * FROM users WHERE id = ?', [$u[$k]]), ['student', 's2', 's3']);
+        $deals = [];
+        foreach ($m as $info) {
+            foreach ($info['deals'] as $did) {
+                $d = Db::one('SELECT id, merchant_id, type FROM deals WHERE id = ?', [$did]);
+                if ($d['type'] === 'groupbuy') {
+                    $deals[] = $d;
+                }
+            }
+        }
+        $merchants = [];
+        $perDay = [6 => 5, 5 => 8, 4 => 7, 3 => 11, 2 => 9, 1 => 14];
+        $seq = 0;
+        foreach ($perDay as $daysAgo => $n) {
+            for ($i = 0; $i < $n; $i++, $seq++) {
+                $buyer = $buyers[$seq % 3];
+                $deal = $deals[($seq * 7 + $daysAgo) % count($deals)];
+                $merchants[$deal['merchant_id']] ??= Db::one('SELECT * FROM merchants WHERE id = ?', [$deal['merchant_id']]);
+                $order = OrderService::pay($buyer, (int) OrderService::create($buyer, (int) $deal['id'], 1 + ($seq % 4 === 0 ? 1 : 0))['id']);
+                foreach ($order['coupons'] as $c) {
+                    OrderService::verifyCoupon($merchants[$deal['merchant_id']], $c['code']);
+                }
+                $ts = date('Y-m-d', strtotime("-$daysAgo day")) . sprintf(' %02d:%02d:00', 11 + ($seq % 10), ($seq * 13) % 60);
+                Db::run('UPDATE orders SET created_at = ?, paid_at = ?, completed_at = ? WHERE id = ?', [$ts, $ts, $ts, $order['id']]);
+                Db::run('UPDATE coupons SET used_at = ? WHERE order_id = ?', [$ts, $order['id']]);
+                Db::run('UPDATE ledger SET created_at = ? WHERE order_id = ?', [$ts, $order['id']]);
+            }
+        }
+    }
+
+    /** 下一个仍可下单的送餐时间点（演示数据用） */
+    private static function nextSlot(int $sid): string
+    {
+        $slots = json_decode((string) Db::value('SELECT delivery_slots FROM schools WHERE id = ?', [$sid]), true);
+        $cutoff = (int) Settings::get('takeout_cutoff_minutes');
+        foreach ($slots as $s) {
+            if (time() + $cutoff * 60 <= strtotime(date('Y-m-d') . ' ' . $s)) {
+                return $s;
+            }
+        }
+        return $slots[0]; // 今天都已截单，则为明天第一个批次
     }
 }

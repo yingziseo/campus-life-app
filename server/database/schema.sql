@@ -31,6 +31,8 @@ CREATE TABLE IF NOT EXISTS users (
     role        TEXT NOT NULL DEFAULT 'student', -- student | merchant | manager | admin
     school_id   INTEGER REFERENCES schools(id),
     invite_code TEXT UNIQUE,                     -- 客户经理专属邀请码
+    rider_status TEXT NOT NULL DEFAULT 'none',   -- 外卖团队骑手：none | pending | approved（学生兼职，不改变 role）
+    status      TEXT NOT NULL DEFAULT 'active',  -- active | banned
     created_at  TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
 
@@ -76,6 +78,7 @@ CREATE TABLE IF NOT EXISTS market_items (
     item_condition  TEXT NOT NULL DEFAULT '9成新',
     price           INTEGER NOT NULL,
     original_price  INTEGER,
+    images          TEXT NOT NULL DEFAULT '[]', -- 图片 URL 数组(JSON)
     contact         TEXT,
     status          TEXT NOT NULL DEFAULT 'on_sale', -- on_sale | reserved | sold | off
     views           INTEGER NOT NULL DEFAULT 0,
@@ -93,7 +96,8 @@ CREATE TABLE IF NOT EXISTS treehole_posts (
     tag         TEXT NOT NULL DEFAULT '日常', -- 日常 | 表白 | 吐槽 | 求助 | 失物招领
     like_count  INTEGER NOT NULL DEFAULT 0,
     comment_count INTEGER NOT NULL DEFAULT 0,
-    status      TEXT NOT NULL DEFAULT 'normal', -- normal | hidden
+    report_count INTEGER NOT NULL DEFAULT 0,
+    status      TEXT NOT NULL DEFAULT 'normal', -- normal | hidden（举报达阈值自动隐藏 / 管理员隐藏）
     created_at  TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
 CREATE INDEX IF NOT EXISTS idx_treehole_school ON treehole_posts(school_id, status, id);
@@ -105,6 +109,15 @@ CREATE TABLE IF NOT EXISTS treehole_comments (
     anon_name   TEXT NOT NULL,
     content     TEXT NOT NULL,
     created_at  TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS treehole_reports (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    post_id     INTEGER NOT NULL REFERENCES treehole_posts(id) ON DELETE CASCADE,
+    user_id     INTEGER NOT NULL REFERENCES users(id),
+    reason      TEXT NOT NULL,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    UNIQUE (post_id, user_id)
 );
 
 CREATE TABLE IF NOT EXISTS treehole_likes (
@@ -127,6 +140,8 @@ CREATE TABLE IF NOT EXISTS merchants (
     phone           TEXT NOT NULL,
     intro           TEXT,
     distance_m      INTEGER,                       -- 距学校距离(米)，原型手填
+    cover           TEXT,                          -- 店铺封面图 URL
+    license_image   TEXT,                          -- 营业执照/食品经营许可证 URL（仅后台可见）
     takeout_enabled INTEGER NOT NULL DEFAULT 0,    -- 是否加入校园外卖团队配送
     status          TEXT NOT NULL DEFAULT 'pending', -- pending 待审核 | approved 已通过 | rejected 已驳回
     created_at      TEXT NOT NULL DEFAULT (datetime('now','localtime')),
@@ -145,6 +160,7 @@ CREATE TABLE IF NOT EXISTS deals (
     type              TEXT NOT NULL,     -- groupbuy 团购套餐 | takeout 外卖菜品
     title             TEXT NOT NULL,
     description       TEXT,
+    image             TEXT,              -- 商品图 URL
     pricing_mode      TEXT NOT NULL,     -- voucher | fixed
     competitor_price  INTEGER NOT NULL,  -- 竞品平台(美团等)到手价，用于比价展示
     merchant_settle   INTEGER NOT NULL,  -- 商家到手结算价
@@ -186,13 +202,17 @@ CREATE TABLE IF NOT EXISTS orders (
     delivery_point      TEXT,
     contact_phone       TEXT,
     remark              TEXT,
-    status              TEXT NOT NULL DEFAULT 'pending_pay', -- pending_pay | paid | delivering | completed | cancelled | refunded
+    rider_id            INTEGER REFERENCES users(id), -- 外卖配送骑手
+    status              TEXT NOT NULL DEFAULT 'pending_pay', -- pending_pay | paid | ready(已出餐) | delivering | completed | cancelled | refunded
     created_at          TEXT NOT NULL DEFAULT (datetime('now','localtime')),
     paid_at             TEXT,
+    ready_at            TEXT,
+    picked_at           TEXT,
     completed_at        TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_orders_merchant ON orders(merchant_id, status);
+CREATE INDEX IF NOT EXISTS idx_orders_delivery ON orders(school_id, type, delivery_date, delivery_slot);
 
 -- 团购券码（到店核销）
 CREATE TABLE IF NOT EXISTS coupons (

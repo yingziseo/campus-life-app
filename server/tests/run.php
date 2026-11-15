@@ -154,8 +154,21 @@ check('外卖未选时间点被拒绝', api('POST', '/api/orders', ['deal_id' =>
 $o3 = api('POST', '/api/orders', ['deal_id' => $take['id'], 'quantity' => 1, 'delivery_slot' => '11:30', 'delivery_point' => '东门取餐柜'], $new)['data'];
 check('外卖含配送费 1.5', $o3['delivery_fee'] === 150 && $o3['total_amount'] === 1350);
 api('POST', "/api/orders/{$o3['id']}/pay", [], $new);
-check('商家推进：配送中 → 已送达', api('POST', "/api/merchant/orders/{$o3['id']}/advance", [], $mer)['data']['status'] === 'delivering'
-    && api('POST', "/api/merchant/orders/{$o3['id']}/advance", [], $mer)['data']['status'] === 'completed');
+$rider = api('POST', '/api/auth/demo', ['role' => 'rider'])['data']['token'];
+check('未出餐时骑手不能取餐', api('POST', '/api/rider/pickup', ['order_ids' => [$o3['id']]], $rider)['code'] === 422);
+check('商家出餐 → 待取餐', api('POST', "/api/merchant/orders/{$o3['id']}/advance", [], $mer)['data']['status'] === 'ready');
+check('重复出餐被拒绝', api('POST', "/api/merchant/orders/{$o3['id']}/advance", [], $mer)['code'] === 422);
+check('已出餐不可退款', api('POST', "/api/orders/{$o3['id']}/cancel", [], $new)['code'] === 422);
+check('非骑手不能访问骑手端', api('GET', '/api/rider/dashboard', [], $stu)['code'] === 403);
+$o3d = api('GET', "/api/orders/{$o3['id']}", [], $new)['data'];
+check('骑手查看批次取餐清单', ($r = api('GET', '/api/rider/batch?date=' . $o3d['delivery_date'] . '&slot=11:30', [], $rider)) && $ok($r) && count($r['data']['pickups']) >= 1);
+check('骑手取餐', api('POST', '/api/rider/pickup', ['order_ids' => [$o3['id']]], $rider)['data']['picked'] === 1);
+check('取餐后可见完整手机号', str_contains(json_encode(api('GET', '/api/rider/batch?date=' . $o3d['delivery_date'] . '&slot=11:30', [], $rider)['data']['drops']), '"mine":true'));
+$before = api('GET', '/api/rider/dashboard', [], $rider)['data']['total_earning'];
+check('骑手送达并获得提成 1 元', api('POST', '/api/rider/deliver', ['order_ids' => [$o3['id']]], $rider)['data']['earning'] === 100
+    && api('GET', '/api/rider/dashboard', [], $rider)['data']['total_earning'] === $before + 100);
+check('送达后订单完成', api('GET', "/api/orders/{$o3['id']}", [], $new)['data']['status'] === 'completed');
+check('学生申请加入外卖团队', api('POST', '/api/rider/apply', [], $new)['data']['rider_status'] === 'pending');
 
 // 商家定价 & 上架
 $r = api('POST', '/api/merchant/quote', ['pricing_mode' => 'voucher', 'competitor_price' => 15, 'merchant_settle' => 10.5, 'voucher_face' => 2, 'voucher_cost' => 1], $mer);
@@ -174,6 +187,61 @@ $newMid = $r['data']['id'];
 check('客户经理审核通过', api('POST', "/api/manager/merchants/$newMid/approve", [], $mgr)['data']['status'] === 'approved');
 check('重复审核被拒绝', api('POST', "/api/manager/merchants/$newMid/approve", [], $mgr)['code'] === 422);
 check('佣金明细', count(api('GET', '/api/manager/commissions', [], $mgr)['data']) > 0);
+
+// 树洞举报
+$p2 = api('POST', '/api/treehole', ['content' => '测试举报帖'], $new)['data']['id'];
+check('不能举报自己', api('POST', "/api/treehole/$p2/report", ['reason' => '其他'], $new)['code'] === 422);
+check('举报成功', $ok(api('POST', "/api/treehole/$p2/report", ['reason' => '广告引流'], $stu)));
+check('重复举报被拒绝', api('POST', "/api/treehole/$p2/report", ['reason' => '其他'], $stu)['code'] === 422);
+api('POST', "/api/treehole/$p2/report", ['reason' => '其他'], $boss);
+api('POST', "/api/treehole/$p2/report", ['reason' => '其他'], $rider);
+check('举报 3 次自动隐藏', api('GET', "/api/treehole/$p2/comments", [], $stu)['code'] === 404);
+
+// 图片上传
+$png = sys_get_temp_dir() . '/campus-upload-' . getmypid() . '.png';
+file_put_contents($png, base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='));
+$up = static function (string $file, string $mime) use ($port, $new): array {
+    $ch = curl_init("http://127.0.0.1:$port/api/upload");
+    curl_setopt_array($ch, [CURLOPT_POST => true, CURLOPT_RETURNTRANSFER => true, CURLOPT_HTTPHEADER => ["Authorization: Bearer $new"],
+        CURLOPT_POSTFIELDS => ['file' => new CURLFile($file, $mime)]]);
+    $r = json_decode((string) curl_exec($ch), true);
+    curl_close($ch);
+    return $r;
+};
+$r = $up($png, 'image/png');
+check('上传图片', $ok($r) && preg_match('#^/uploads/\d{6}/[a-f0-9]{24}\.png$#', $r['data']['url']));
+$url = $r['data']['url'];
+check('图片可访问', str_starts_with((string) @file_get_contents("http://127.0.0.1:$port$url"), "\x89PNG"));
+file_put_contents($png . '.txt', '<?php echo 1;');
+check('非图片被拒绝', $up($png . '.txt', 'image/png')['code'] === 422);
+$item = api('POST', '/api/market', ['title' => '带图', 'price' => 10, 'contact' => 'x', 'images' => [$url, 'http://evil.com/a.png']], $new)['data'];
+check('二手图片仅保留本站地址', $item['images'] === [$url]);
+@unlink($png); @unlink($png . '.txt');
+@unlink(APP_ROOT . $url = str_replace('/uploads', '/storage/uploads', $url));
+
+// 管理后台
+$adm = api('POST', '/api/auth/demo', ['role' => 'admin'])['data']['token'];
+check('非管理员不能访问后台', api('GET', '/api/admin/dashboard', [], $mgr)['code'] === 403);
+$d = api('GET', '/api/admin/dashboard', [], $adm)['data'];
+check('后台看板', $d['totals']['orders'] > 0 && count($d['daily']) === 7 && $d['totals']['platform_income'] > 0);
+check('后台商品比价抽查含结算价', isset(api('GET', '/api/admin/deals', [], $adm)['data'][0]['merchant_settle']));
+$sch = api('POST', '/api/admin/schools', ['name' => '测试学院', 'city' => '青岛', 'status' => 'active', 'delivery_slots' => ['12:00', '25:00', '18:00'], 'delivery_points' => ['南门']], $adm)['data'];
+check('后台新增学校并过滤非法时间点', $sch['status'] === 'active' && json_decode($sch['delivery_slots'], true) === ['12:00', '18:00']);
+check('新学校出现在学生选校列表', in_array('测试学院', array_column(api('GET', '/api/schools')['data'], 'name'), true));
+$u = api('GET', '/api/admin/users?keyword=13900001111', [], $adm)['data'][0];
+check('后台审核骑手', api('POST', "/api/admin/users/{$u['id']}", ['rider_status' => 'approved'], $adm)['data']['rider_status'] === 'approved');
+$mg = api('POST', "/api/admin/users/{$u['id']}", ['role' => 'manager'], $adm)['data'];
+check('设为客户经理自动生成邀请码', $mg['role'] === 'manager' && preg_match('/^QD\d{4}$/', $mg['invite_code']));
+check('封禁用户后无法访问', $ok(api('POST', "/api/admin/users/{$u['id']}", ['status' => 'banned'], $adm)) && api('GET', '/api/auth/me', [], $new)['code'] === 401);
+check('参数越界被拒绝', api('POST', '/api/admin/settings', ['manager_rate' => 1.5], $adm)['code'] === 422);
+check('修改分成比例生效', api('POST', '/api/admin/settings', ['manager_rate' => 0.4], $adm)['data']['manager_rate'] == 0.4
+    && api('POST', '/api/merchant/quote', ['pricing_mode' => 'fixed', 'competitor_price' => 15, 'merchant_settle' => 9.5, 'sale_price' => 12], $mer)['data']['manager_commission'] === 100);
+api('POST', '/api/admin/settings', ['manager_rate' => 0.5], $adm);
+$faq = api('POST', '/api/admin/faqs', ['question' => '游泳馆在哪', 'answer' => '体育馆负一层', 'keywords' => '游泳，泳池'], $adm)['data'];
+check('后台新增 FAQ 后问答命中', api('POST', '/api/ai/ask', ['question' => '学校游泳馆开放吗'], $stu)['data']['answer'] === '体育馆负一层');
+check('后台恢复被隐藏帖子', api('POST', "/api/admin/treehole/$p2/restore", [], $adm)['data']['status'] === 'normal' && $ok(api('GET', "/api/treehole/$p2/comments", [], $stu)));
+check('后台驳回商家', api('POST', "/api/admin/merchants/$newMid/reject", [], $adm)['data']['status'] === 'rejected');
+check('后台流水汇总', count(api('GET', '/api/admin/ledger', [], $adm)['data']['summary']) >= 4);
 
 echo "\n" . ($failed ? "\033[31m失败 " . count($failed) . " 项\033[0m，" : "\033[32m全部通过\033[0m，") . "通过 $passed 项\n";
 exit($failed ? 1 : 0);

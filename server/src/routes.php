@@ -34,6 +34,8 @@ $r->post('/api/treehole',                  [C\TreeholeController::class, 'create
 $r->post('/api/treehole/{id}/like',        [C\TreeholeController::class, 'like']);
 $r->get('/api/treehole/{id}/comments',     [C\TreeholeController::class, 'comments']);
 $r->post('/api/treehole/{id}/comments',    [C\TreeholeController::class, 'comment']);
+$r->post('/api/treehole/{id}/report',      [C\TreeholeController::class, 'report']);
+$r->post('/api/upload',                    [C\UploadController::class, 'image']);
 
 // 板块二：周边本地生活（学生）
 $r->get('/api/local/merchants',        [C\LocalController::class, 'merchants']);
@@ -64,6 +66,37 @@ $r->get('/api/manager/dashboard',                  [C\ManagerController::class, 
 $r->get('/api/manager/merchants',                  [C\ManagerController::class, 'merchants'], 'manager');
 $r->post('/api/manager/merchants/{id}/{action}',   [C\ManagerController::class, 'review'], 'manager');
 $r->get('/api/manager/commissions',                [C\ManagerController::class, 'commissions'], 'manager');
+
+// 骑手端（校园外卖团队，学生兼职）
+$r->post('/api/rider/apply',      [C\RiderController::class, 'apply']);
+$r->get('/api/rider/dashboard',   [C\RiderController::class, 'dashboard'], 'rider');
+$r->get('/api/rider/batch',       [C\RiderController::class, 'batch'], 'rider');
+$r->post('/api/rider/pickup',     [C\RiderController::class, 'pickup'], 'rider');
+$r->post('/api/rider/deliver',    [C\RiderController::class, 'deliver'], 'rider');
+$r->get('/api/rider/earnings',    [C\RiderController::class, 'earnings'], 'rider');
+
+// 平台管理后台
+$r->get('/api/admin/dashboard',                  [C\AdminController::class, 'dashboard'], 'admin');
+$r->get('/api/admin/schools',                    [C\AdminController::class, 'schools'], 'admin');
+$r->post('/api/admin/schools',                   [C\AdminController::class, 'saveSchool'], 'admin');
+$r->post('/api/admin/schools/{id}',              [C\AdminController::class, 'saveSchool'], 'admin');
+$r->get('/api/admin/merchants',                  [C\AdminController::class, 'merchants'], 'admin');
+$r->post('/api/admin/merchants/{id}/{action}',   [C\AdminController::class, 'reviewMerchant'], 'admin');
+$r->get('/api/admin/deals',                      [C\AdminController::class, 'deals'], 'admin');
+$r->post('/api/admin/deals/{id}/toggle',         [C\AdminController::class, 'toggleDeal'], 'admin');
+$r->get('/api/admin/orders',                     [C\AdminController::class, 'orders'], 'admin');
+$r->get('/api/admin/ledger',                     [C\AdminController::class, 'ledger'], 'admin');
+$r->get('/api/admin/users',                      [C\AdminController::class, 'users'], 'admin');
+$r->post('/api/admin/users/{id}',                [C\AdminController::class, 'updateUser'], 'admin');
+$r->get('/api/admin/settings',                   [C\AdminController::class, 'settings'], 'admin');
+$r->post('/api/admin/settings',                  [C\AdminController::class, 'saveSettings'], 'admin');
+$r->get('/api/admin/faqs',                       [C\AdminController::class, 'faqs'], 'admin');
+$r->post('/api/admin/faqs',                      [C\AdminController::class, 'saveFaq'], 'admin');
+$r->post('/api/admin/faqs/{id}',                 [C\AdminController::class, 'saveFaq'], 'admin');
+$r->post('/api/admin/faqs/{id}/delete',          [C\AdminController::class, 'deleteFaq'], 'admin');
+$r->get('/api/admin/ai-logs',                    [C\AdminController::class, 'aiLogs'], 'admin');
+$r->get('/api/admin/treehole',                   [C\AdminController::class, 'treehole'], 'admin');
+$r->post('/api/admin/treehole/{id}/{action}',    [C\AdminController::class, 'moderatePost'], 'admin');
 
 // AI 问答（预留，当前 FAQ 兜底）
 $r->post('/api/ai/ask', [C\AiController::class, 'ask'], '');

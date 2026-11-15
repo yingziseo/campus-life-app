@@ -93,10 +93,11 @@ defineRoute('/m', {
         <div class="card flush" v-else>
           <div v-for="s in d.takeout_slots" :key="s.delivery_date + s.delivery_slot" class="cell" @click="go('/m/orders?type=takeout')">
             <Icon name="clock" :size="18" /><span class="grow"><b>{{ s.delivery_date === today ? '今天' : s.delivery_date.slice(5) }} {{ s.delivery_slot }}</b> <span class="muted">送达</span></span>
-            <span>{{ s.orders }} 单 / {{ s.items }} 份</span><Icon name="right" :size="14" class="arrow" />
+            <span class="tag warn" v-if="s.to_cook">待出餐 {{ s.to_cook }}</span><span class="tag primary" v-if="s.to_pick">待取 {{ s.to_pick }}</span>
+            <span>{{ s.items }} 份</span><Icon name="right" :size="14" class="arrow" />
           </div>
         </div>
-        <div class="notice">💡 原型阶段由商家端推进外卖"配送中 / 已送达"，v0.3 起由骑手端完成</div>
+        <div class="notice">💡 出餐后由校园外卖团队骑手按批次到店取餐、集中送达取餐点，送达后货款自动结算</div>
       </template>
     </div>`,
   setup() {
@@ -113,7 +114,8 @@ defineRoute('/m/deals', {
     <div class="page with-bar" style="padding-top:12px">
       <Empty v-if="data && !data.length" text="还没有商品" icon="🛍️"><button class="btn mt12" @click="go('/m/deal/new')">上架第一个商品</button></Empty>
       <div v-for="d in data" :key="d.id" class="card" :style="{ opacity: d.status === 'on' ? 1 : .6 }">
-        <div class="row between"><b class="ellipsis grow">{{ d.title }}</b><span class="tag" :class="d.status === 'on' ? 'ok' : ''">{{ d.status === 'on' ? '在售' : '已下架' }}</span></div>
+        <div class="row"><Cover cls="thumb sm" :src="d.image" :emoji="d.type === 'takeout' ? '🛵' : '🎫'" bg="var(--primary-soft)" />
+          <b class="ellipsis grow">{{ d.title }}</b><span class="tag" :class="d.status === 'on' ? 'ok' : ''">{{ d.status === 'on' ? '在售' : '已下架' }}</span></div>
         <div class="row mt8" style="gap:6px"><span class="tag primary">{{ d.type === 'takeout' ? '校园外卖' : '到店团购' }}</span><span class="tag">{{ d.pricing_mode === 'voucher' ? '代金券模式' : '平台定价' }}</span><span class="muted">已售 {{ d.sold }} · 库存 {{ d.stock }}</span></div>
         <div class="quote mt8">
           <div class="line"><span>用户实付 / 美团价</span><b>¥{{ yuan(d.sale_price) }} / ¥{{ yuan(d.competitor_price) }}</b></div>
@@ -140,20 +142,21 @@ const DealEditor = {
         <div class="field"><label>商品名称</label><input v-model="f.title" placeholder="如：招牌黄焖鸡 单人餐"></div>
         <div class="field"><label>库存</label><input v-model="f.stock" type="number"></div>
         <div class="field col"><label>描述</label><textarea v-model="f.description" placeholder="套餐内容、使用时间等" style="min-height:50px"></textarea></div>
+        <div class="field col"><label>商品图</label><ImagePicker v-model="f.image" :max="1" label="菜品/套餐图" /></div>
       </div>
       <PricingCalc v-model="pricing" @quote="q = $event" />
     </div>
     <div class="action-bar"><button class="btn block" :disabled="!q || !f.title || busy" @click="save">{{ id ? '保存' : '确认上架' }}</button></div>`,
   setup() {
     const id = store.route.params.id;
-    const f = reactive({ type: 'groupbuy', title: '', stock: 999, description: '' });
+    const f = reactive({ type: 'groupbuy', title: '', stock: 999, description: '', image: '' });
     const pricing = reactive({ pricing_mode: 'voucher', competitor_price: '', merchant_settle: '', voucher_face: '', voucher_cost: '', sale_price: '' });
     const q = ref(null), busy = ref(false), ready = ref(!id);
     onMounted(async () => {
       if (!id) return;
       const d = (await api('/merchant/deals')).find((x) => String(x.id) === id);
       if (!d) return go('/m/deals', true);
-      Object.assign(f, { type: d.type, title: d.title, stock: d.stock, description: d.description || '' });
+      Object.assign(f, { type: d.type, title: d.title, stock: d.stock, description: d.description || '', image: d.image || '' });
       const y = (c) => (c == null ? '' : c / 100);
       Object.assign(pricing, { pricing_mode: d.pricing_mode, competitor_price: y(d.competitor_price), merchant_settle: y(d.merchant_settle), voucher_face: y(d.voucher_face), voucher_cost: y(d.voucher_cost), sale_price: y(d.sale_price) });
       ready.value = true;
@@ -223,7 +226,8 @@ defineRoute('/m/orders', {
           <div class="muted mt8">{{ o.nickname }} · {{ o.contact_phone }} · {{ shortTime(o.paid_at) }}</div>
           <div class="muted" v-if="o.type === 'takeout'">送至 {{ o.delivery_point }}<template v-if="o.remark"> · 备注：{{ o.remark }}</template></div>
           <div class="row between mt8"><span>到手 <b style="color:var(--ok)">¥{{ yuan(o.merchant_amount) }}</b></span>
-            <button v-if="o.type === 'takeout' && ['paid', 'delivering'].includes(o.status)" class="btn sm" @click="advance(o)">{{ o.status === 'paid' ? '已出餐，开始配送' : '确认送达' }}</button></div>
+            <button v-if="o.type === 'takeout' && o.status === 'paid'" class="btn sm" @click="advance(o)">已出餐</button>
+            <span v-else-if="o.rider_name" class="muted">骑手 {{ o.rider_name }}</span></div>
         </div>
       </template>
     </div>`,
@@ -240,7 +244,7 @@ defineRoute('/m/orders', {
     });
     return {
       type, tabs, data, loading, grouped,
-      async advance(o) { try { const r = await post(`/merchant/orders/${o.id}/advance`); o.status = r.status; toast(r.status === 'completed' ? '已送达，货款已结算' : '配送中'); } catch (e) {} },
+      async advance(o) { try { const r = await post(`/merchant/orders/${o.id}/advance`); o.status = r.status; toast('已出餐，等待骑手取餐'); } catch (e) {} },
     };
   },
 }, { tab: 'm-orders', role: 'merchant' });
@@ -258,6 +262,7 @@ defineRoute('/m/shop', {
         <div class="field"><label>校园外卖</label><span class="grow muted" style="text-align:right">固定时间点集中配送</span>
           <button class="switch" :class="{ on: m.takeout_enabled }" @click="m.takeout_enabled = m.takeout_enabled ? 0 : 1"></button></div>
         <div class="field col"><label>店铺简介</label><textarea v-model="m.intro"></textarea></div>
+        <div class="field col"><label>店铺封面</label><ImagePicker v-model="m.cover" :max="1" label="门头照" /></div>
       </div>
     </div>
     <div class="action-bar" v-if="m"><button class="btn block" @click="save">保存</button></div>`,

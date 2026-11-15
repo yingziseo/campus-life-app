@@ -18,7 +18,7 @@ defineRoute('/local', {
       <Empty v-else-if="!data?.length" text="这个分类还没有商家入驻" icon="🏪" />
       <div class="card flush" v-else>
         <div v-for="m in data" :key="m.id" class="list-item" @click="go('/local/merchant/' + m.id)">
-          <div class="thumb" :style="{ background: catOf(m.category).bg }">{{ catOf(m.category).emoji }}</div>
+          <Cover cls="thumb" :src="m.cover" :emoji="catOf(m.category).emoji" :bg="catOf(m.category).bg" />
           <div class="grow">
             <div class="row between"><b class="ellipsis">{{ m.name }}</b><span class="muted">{{ dist(m.distance_m) }}</span></div>
             <div class="muted ellipsis">{{ catOf(m.category).name }} · {{ m.intro }}</div>
@@ -47,7 +47,7 @@ defineRoute('/local', {
 defineRoute('/local/merchant/:id', {
   template: `<NavBar :title="m?.name || '店铺'" back="/local" />
     <div class="page" v-if="m">
-      <div :style="{ background: catOf(m.category).bg }" style="height:130px;display:flex;align-items:center;justify-content:center;font-size:64px">{{ catOf(m.category).emoji }}</div>
+      <Cover :src="m.cover" :emoji="catOf(m.category).emoji" :bg="catOf(m.category).bg" style="height:150px;font-size:64px" />
       <div class="card" style="margin-top:-18px;position:relative">
         <h3 style="margin:0 0 4px">{{ m.name }}</h3>
         <div class="muted">{{ catOf(m.category).name }} · {{ m.intro }}</div>
@@ -57,7 +57,7 @@ defineRoute('/local/merchant/:id', {
         <div class="section-title" v-if="g.items.length">{{ g.title }} <small>{{ g.sub }}</small></div>
         <div class="card flush" v-if="g.items.length">
           <div v-for="d in g.items" :key="d.id" class="list-item" @click="go('/local/deal/' + d.id)">
-            <div class="thumb sm" :style="{ background: catOf(d.type === 'takeout' ? 'takeout' : m.category).bg }">{{ d.type === 'takeout' ? '🛵' : '🎫' }}</div>
+            <Cover cls="thumb" :src="d.image" :emoji="d.type === 'takeout' ? '🛵' : '🎫'" :bg="catOf(d.type === 'takeout' ? 'takeout' : m.category).bg" />
             <div class="grow">
               <b class="ellipsis" style="display:block">{{ d.title }}</b>
               <div class="row" style="gap:6px;margin-top:2px"><span class="tag save">比美团省{{ yuan(d.saving) }}元</span><span v-if="d.voucher_label" class="tag outline">{{ d.voucher_label }}</span></div>
@@ -82,7 +82,7 @@ defineRoute('/local/merchant/:id', {
 defineRoute('/local/deal/:id', {
   template: `<NavBar title="商品详情" back />
     <div class="page" style="padding-bottom:90px" v-if="d">
-      <div :style="{ background: d.type === 'takeout' ? '#e9f7ff' : '#fff1e6' }" style="height:180px;display:flex;align-items:center;justify-content:center;font-size:80px">{{ d.type === 'takeout' ? '🛵' : '🎫' }}</div>
+      <Cover :src="d.image" :emoji="d.type === 'takeout' ? '🛵' : '🎫'" :bg="d.type === 'takeout' ? '#e9f7ff' : '#fff1e6'" style="height:200px;font-size:80px" />
       <div class="card" style="margin-top:-18px;position:relative">
         <div class="row"><span class="price lg"><small>¥</small>{{ yuan(d.sale_price) }}</span>
           <span class="strike" v-if="d.pricing_mode === 'voucher'">到店价 ¥{{ yuan(d.list_price) }}</span>
@@ -96,7 +96,7 @@ defineRoute('/local/deal/:id', {
       <template v-if="d.type === 'takeout'">
         <div class="section-title">送餐时间 <small>送餐前 40 分钟截单，错过顺延到次日</small></div>
         <div class="card"><div class="chips">
-          <span v-for="s in d.delivery.delivery_slots" :key="s" class="chip" :class="{ on: f.delivery_slot === s }" @click="f.delivery_slot = s"><Icon name="clock" :size="14" style="margin-right:4px"/>{{ s }}</span></div></div>
+          <span v-for="s in d.delivery.delivery_slots" :key="s" class="chip" :class="{ on: f.delivery_slot === s }" @click="f.delivery_slot = s"><Icon name="clock" :size="14" style="margin-right:4px"/>{{ slotDay(s) }} {{ s }}</span></div></div>
         <div class="section-title">取餐点</div>
         <div class="card"><div class="chips">
           <span v-for="p in d.delivery.delivery_points" :key="p" class="chip" :class="{ on: f.delivery_point === p }" @click="f.delivery_point = p">{{ p }}</span></div></div>
@@ -127,8 +127,14 @@ defineRoute('/local/deal/:id', {
     });
     const total = computed(() => d.value ? d.value.sale_price * f.quantity + (d.value.type === 'takeout' ? d.value.delivery_fee : 0) : 0);
     const busy = ref(false);
+    // 与后端 OrderService::resolveDelivery 同一规则：距送餐不足截单时间则顺延到明天
+    const slotDay = (s) => {
+      const [h, m] = s.split(':').map(Number);
+      const t = new Date(); t.setHours(h, m, 0, 0);
+      return Date.now() + (d.value?.cutoff_minutes ?? 40) * 60000 <= t.getTime() ? '今天' : '明天';
+    };
     return {
-      d, f, total, busy,
+      d, f, total, busy, slotDay,
       async submit() {
         busy.value = true;
         try { const o = await post('/orders', { deal_id: d.value.id, ...f }); go('/order/' + o.id, true); } catch (e) {} finally { busy.value = false; }
@@ -147,7 +153,8 @@ defineRoute('/order/:id', {
       <div class="card" v-else>
         <div class="row between"><b style="font-size:16px">{{ orderStatus(o) }}</b><span class="tag save">本单省 ¥{{ yuan(o.saved) }}</span></div>
         <template v-if="o.type === 'takeout'">
-          <div class="mt12"><Steps :items="['已支付','配送中','已送达']" :current="{ paid: 0, delivering: 1, completed: 2 }[o.status] ?? -1" /></div>
+          <div class="mt12"><Steps :items="['已支付','已出餐','配送中','已送达']" :current="{ paid: 0, ready: 1, delivering: 2, completed: 3 }[o.status] ?? -1" /></div>
+          <div class="muted mt8" v-if="o.rider_name">配送骑手：{{ o.rider_name }}（校园外卖团队）</div>
           <div class="compare mt12" style="background:var(--primary-soft);color:var(--primary-ink)"><Icon name="clock" :size="18"/>
             <span class="grow">{{ o.delivery_date === today ? '今天' : o.delivery_date }} {{ o.delivery_slot }} 送达 <b>{{ o.delivery_point }}</b></span></div>
         </template>
@@ -242,17 +249,19 @@ defineRoute('/merchant-apply', {
         <div class="field"><label>联系电话</label><input v-model="f.phone"></div>
         <div class="field"><label>距学校</label><input v-model="f.distance_m" type="number" placeholder="选填"><span class="unit">米</span></div>
         <div class="field col"><label>店铺简介</label><textarea v-model="f.intro" placeholder="招牌菜 / 特色"></textarea></div>
+        <div class="field col"><label>店铺封面</label><ImagePicker v-model="f.cover" :max="1" label="门头照" /></div>
+        <div class="field col"><label>营业执照 / 食品经营许可证 <span class="muted">（仅平台审核可见）</span></label><ImagePicker v-model="f.license_image" :max="1" label="上传证照" /></div>
       </div>
       <div class="form">
         <div class="field"><label>开通外卖</label><span class="grow muted" style="text-align:right">加入校园外卖团队配送</span>
           <button class="switch" :class="{ on: f.takeout_enabled }" @click="f.takeout_enabled = f.takeout_enabled ? 0 : 1"></button></div>
         <div class="field"><label>邀请码</label><input v-model="f.invite_code" placeholder="客户经理提供，如 QD8801" style="text-transform:uppercase"></div>
       </div>
-      <div class="hint">填写邀请码后，由对接的客户经理为你审核与运营；营业执照、食品经营许可证上传将在 v0.2 支持。</div>
+      <div class="hint">填写邀请码后，由对接的客户经理初审、平台终审，并为你提供运营支持。</div>
     </div>
     <div class="action-bar"><button class="btn block" :disabled="busy" @click="submit">提交入驻申请</button></div>`,
   setup() {
-    const f = reactive({ name: '', category: 'food', address: '', phone: '', distance_m: '', intro: '', takeout_enabled: 0, invite_code: '' });
+    const f = reactive({ name: '', category: 'food', address: '', phone: '', distance_m: '', intro: '', takeout_enabled: 0, invite_code: '', cover: '', license_image: '' });
     const cats = [{ v: 'food', t: '餐饮美食' }, { v: 'netcafe', t: '网吧' }, { v: 'billiards', t: '台球' }, { v: 'homestay', t: '民宿' }, { v: 'ktv', t: 'KTV' }, { v: 'other', t: '其他' }];
     const busy = ref(false);
     return {

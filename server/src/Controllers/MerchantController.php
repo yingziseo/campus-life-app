@@ -40,6 +40,8 @@ final class MerchantController
                 'intro'           => $req->str('intro', 200),
                 'distance_m'      => $req->int('distance_m') ?: null,
                 'takeout_enabled' => $req->int('takeout_enabled') ? 1 : 0,
+                'cover'           => UploadController::checkUrl($req->str('cover', 200)),
+                'license_image'   => UploadController::checkUrl($req->str('license_image', 200)),
                 'status'          => $auto ? 'approved' : 'pending',
                 'approved_at'     => $auto ? now() : null,
             ]);
@@ -65,6 +67,7 @@ final class MerchantController
             'intro'           => $req->str('intro', 200),
             'phone'           => $req->str('phone', 20, true, '联系电话'),
             'takeout_enabled' => $req->int('takeout_enabled') ? 1 : 0,
+            'cover'           => UploadController::checkUrl($req->str('cover', 200)),
         ], 'id = :id', ['id' => $m['id']]);
         return $this->merchantById((int) $m['id']);
     }
@@ -81,8 +84,9 @@ final class MerchantController
             'total_income'  => (int) Db::value("SELECT COALESCE(SUM(amount),0) FROM ledger WHERE party_type = 'merchant' AND party_id = ?", [$mid]),
             'unused_coupons'=> (int) Db::value("SELECT COUNT(*) FROM coupons c JOIN orders o ON o.id = c.order_id WHERE o.merchant_id = ? AND c.status = 'unused' AND o.status = 'paid'", [$mid]),
             'takeout_slots' => Db::all(
-                "SELECT delivery_date, delivery_slot, COUNT(*) AS orders, SUM(quantity) AS items FROM orders
-                 WHERE merchant_id = ? AND type = 'takeout' AND status IN ('paid','delivering') GROUP BY delivery_date, delivery_slot ORDER BY delivery_date, delivery_slot",
+                "SELECT delivery_date, delivery_slot, COUNT(*) AS orders, SUM(quantity) AS items,
+                    SUM(status = 'paid') AS to_cook, SUM(status = 'ready') AS to_pick FROM orders
+                 WHERE merchant_id = ? AND type = 'takeout' AND status IN ('paid','ready','delivering') GROUP BY delivery_date, delivery_slot ORDER BY delivery_date, delivery_slot",
                 [$mid]
             ),
             'deal_count' => (int) Db::value("SELECT COUNT(*) FROM deals WHERE merchant_id = ? AND status = 'on'", [$mid]),
@@ -123,6 +127,7 @@ final class MerchantController
             'type'             => $type,
             'title'            => $req->str('title', 40, true, '商品名称'),
             'description'      => $req->str('description', 300),
+            'image'            => UploadController::checkUrl($req->str('image', 200)),
             'pricing_mode'     => $q['pricing_mode'],
             'competitor_price' => $q['competitor_price'],
             'merchant_settle'  => $q['merchant_settle'],
@@ -167,8 +172,8 @@ final class MerchantController
         }
         return Db::all(
             'SELECT o.id, o.order_no, o.type, o.title, o.quantity, o.total_amount, o.merchant_amount, o.status, o.delivery_date,
-                    o.delivery_slot, o.delivery_point, o.contact_phone, o.remark, o.paid_at, o.completed_at, u.nickname
-             FROM orders o JOIN users u ON u.id = o.user_id WHERE ' . implode(' AND ', $where) . ' ORDER BY o.id DESC LIMIT 100',
+                    o.delivery_slot, o.delivery_point, o.contact_phone, o.remark, o.paid_at, o.completed_at, u.nickname, r.nickname AS rider_name
+             FROM orders o JOIN users u ON u.id = o.user_id LEFT JOIN users r ON r.id = o.rider_id WHERE ' . implode(' AND ', $where) . ' ORDER BY o.id DESC LIMIT 100',
             $params
         );
     }
@@ -183,7 +188,7 @@ final class MerchantController
     public function advance(Request $req): array
     {
         $m = $this->current($req, true);
-        return OrderService::advanceTakeout($m, (int) $req->params['id']);
+        return OrderService::markReady($m, (int) $req->params['id']);
     }
 
     private function current(Request $req, bool $mustApproved = false): array

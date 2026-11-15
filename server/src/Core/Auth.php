@@ -16,6 +16,13 @@ final class Auth
         if (!$user) {
             throw new HttpException('请先登录', 401);
         }
+        if ($user['status'] === 'banned') {
+            throw new HttpException('账号已被限制使用，请联系平台', 403);
+        }
+        // 骑手是学生的兼职身份（rider_status），不占用 role
+        if (in_array('rider', $roles, true) && $user['rider_status'] === 'approved') {
+            return $user;
+        }
         if ($roles !== ['login'] && !in_array($user['role'], $roles, true) && $user['role'] !== 'admin') {
             throw new HttpException('当前身份无权访问', 403);
         }

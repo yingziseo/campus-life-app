@@ -8,7 +8,9 @@ const PAGES = {
   student: ['/', '/local', '/local?cat=takeout', '/local/merchant/1', '/local/deal/1', '/local/deal/2', '/errands?type=errand', '/errands?type=express', '/errands/1', '/errands/new?type=express', '/market', '/market/1', '/market/new', '/treehole', '/treehole/1', '/treehole/new', '/ai', '/orders', '/me', '/merchant-apply', '/school'],
   merchant: ['/m', '/m/deals', '/m/deal/new', '/m/deal/1', '/m/verify', '/m/orders', '/m/orders?type=takeout', '/m/shop', '/me'],
   manager: ['/g', '/g/merchants', '/g/calc', '/g/commissions', '/me'],
+  rider: ['/r', '/r/earnings', '/me'],
 };
+const ADMIN = ['dashboard', 'schools', 'merchants', 'deals', 'orders', 'ledger', 'users', 'treehole', 'faqs', 'settings'];
 (async () => {
   const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
   const errors = [];
@@ -52,6 +54,29 @@ const PAGES = {
   await page.waitForTimeout(600);
   await page.screenshot({ path: __dirname + '/shots/flow_takeout.png' });
   console.log('takeout:', (await page.innerText('.card')).replace(/\n/g, ' | ').slice(0, 120));
+  // 管理后台逐页
+  const adm = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  adm.on('pageerror', (e) => errors.push(`[admin] pageerror: ${e.message}`));
+  adm.on('console', (m) => m.type() === 'error' && errors.push(`[admin] console: ${m.text()}`));
+  await adm.goto(`${BASE}/admin/`);
+  await adm.waitForTimeout(600);
+  await adm.click('text=演示管理员一键登录');
+  await adm.waitForTimeout(900);
+  for (const k of ADMIN) {
+    await adm.evaluate((h) => (location.hash = h), '#/' + k);
+    await adm.waitForTimeout(700);
+    const txt = await adm.innerText('.content');
+    if (!txt.trim() || txt.includes('加载中')) errors.push(`[admin] ${k}: 内容为空`);
+    await adm.screenshot({ path: `${__dirname}/shots/admin_${k}.png`, fullPage: true });
+  }
+  await adm.evaluate(() => (location.hash = '#/dashboard'));
+  await adm.waitForTimeout(600);
+  const hits = await adm.$$('.chart .hit');
+  if (hits.length) await hits[6].hover();
+  await adm.waitForTimeout(200);
+  console.log('chart tip:', await adm.innerText('.chart .tip').catch(() => '无'));
+  await adm.close();
+
   // 预览页
   const pv = await browser.newPage({ viewport: { width: 1280, height: 860 } });
   pv.on('pageerror', (e) => errors.push(`[preview] pageerror: ${e.message}`));

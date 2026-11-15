@@ -24,16 +24,24 @@ final class MarketController
             $where[] = '(i.title LIKE ? OR i.description LIKE ?)';
             array_push($params, "%$kw%", "%$kw%");
         }
-        return Db::all(
-            'SELECT i.id, i.title, i.price, i.original_price, i.category, i.item_condition, i.views, i.created_at, u.nickname
+        return self::decode(Db::all(
+            'SELECT i.id, i.title, i.price, i.original_price, i.category, i.item_condition, i.views, i.images, i.created_at, u.nickname
              FROM market_items i JOIN users u ON u.id = i.user_id WHERE ' . implode(' AND ', $where) . " ORDER BY i.id DESC LIMIT $limit OFFSET $offset",
             $params
-        );
+        ));
+    }
+
+    public static function decode(array $rows): array
+    {
+        return array_map(static function (array $r): array {
+            $r['images'] = json_decode($r['images'] ?? '[]', true) ?: [];
+            return $r;
+        }, $rows);
     }
 
     public function mine(Request $req): array
     {
-        return Db::all('SELECT * FROM market_items WHERE user_id = ? ORDER BY id DESC', [$req->user['id']]);
+        return self::decode(Db::all('SELECT * FROM market_items WHERE user_id = ? ORDER BY id DESC', [$req->user['id']]));
     }
 
     public function show(Request $req): array
@@ -45,7 +53,7 @@ final class MarketController
             throw new HttpException('商品不存在', 404);
         }
         $item['is_owner'] = (int) $item['user_id'] === (int) $req->user['id'];
-        return $item;
+        return self::decode([$item])[0];
     }
 
     public function create(Request $req): array
@@ -65,8 +73,19 @@ final class MarketController
             'price'          => $price,
             'original_price' => $req->money('original_price'),
             'contact'        => $req->str('contact', 40, true, '联系方式'),
+            'images'         => json_encode($this->images($req)),
         ]);
-        return Db::one('SELECT * FROM market_items WHERE id = ?', [$id]);
+        return self::decode([Db::one('SELECT * FROM market_items WHERE id = ?', [$id])])[0];
+    }
+
+    /** 最多 6 张，只接受本站上传地址 */
+    private function images(Request $req): array
+    {
+        $list = $req->input('images', []);
+        if (!is_array($list)) {
+            return [];
+        }
+        return array_values(array_filter(array_map(static fn($u) => UploadController::checkUrl((string) $u), array_slice($list, 0, 6))));
     }
 
     public function setStatus(Request $req): array

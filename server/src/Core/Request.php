@@ -13,6 +13,7 @@ final class Request
         public array $headers = [],
         public array $params = [],   // 路由参数
         public ?array $user = null,  // 由 Auth 注入
+        public array $files = [],
     ) {
     }
 
@@ -34,7 +35,7 @@ final class Request
                 $headers[strtolower(str_replace('_', '-', substr($k, 5)))] = $v;
             }
         }
-        return new self(strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET'), rtrim($path, '/') ?: '/', $_GET, $body, $headers);
+        return new self(strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET'), rtrim($path, '/') ?: '/', $_GET, $body, $headers, files: $_FILES);
     }
 
     public function input(string $key, $default = null)

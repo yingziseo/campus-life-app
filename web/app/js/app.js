@@ -4,7 +4,7 @@ const Root = {
   template: `<div class="shell">
       <component v-if="$store.ready && view" :is="view" :key="$store.route.full" />
       <div v-else class="page loading" style="padding-top:45%">加载中…</div>
-      <TabBar v-if="$store.ready && tab && $store.user" :active="tab" />
+      <TabBar v-if="$store.ready && tab && $store.user" :active="tab" :set="tabset" />
       <PublishSheet v-if="$store.sheet === 'publish'" />
       <div v-if="$store.dialog" class="dialog-wrap"><div class="dialog">
         <div class="dc"><h4>{{ $store.dialog.title }}</h4><p v-if="$store.dialog.content">{{ $store.dialog.content }}</p></div>
@@ -15,8 +15,9 @@ const Root = {
   setup() {
     const view = computed(() => store.route.route?.component);
     const tab = computed(() => store.route.route?.meta.tab);
+    const tabset = computed(() => store.route.route?.meta.tabs);
     return {
-      view, tab,
+      view, tab, tabset,
       closeDialog(ok) { const d = store.dialog; store.dialog = null; d.resolve(ok); },
     };
   },
@@ -40,7 +41,7 @@ async function boot() {
 const app = createApp(Root);
 Object.entries(Globals).forEach(([name, c]) => app.component(name, c));
 Object.assign(app.config.globalProperties, {
-  $store: store, go, back, roleHome, orderStatus, yuan, pct, timeAgo, shortTime, catOf, avatarColor, statusText, statusCls,
+  $store: store, go, back, roleHome, isRider, orderStatus, yuan, pct, timeAgo, shortTime, catOf, avatarColor, statusText, statusCls,
 });
 app.mount('#app');
 boot();

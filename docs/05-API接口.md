@@ -37,6 +37,8 @@
 | POST | /api/treehole/{id}/like | 点赞/取消 |
 | GET | /api/treehole/{id}/comments | 帖子 + 评论 |
 | POST | /api/treehole/{id}/comments | `{content}` |
+| POST | /api/treehole/{id}/report | `{reason}` 举报，累计 3 次自动隐藏 |
+| POST | /api/upload | multipart `file` → `{url}`（JPG/PNG/WEBP ≤3MB） |
 
 ## 板块二：本地生活（学生）
 
@@ -65,7 +67,7 @@
 | POST | /api/merchant/deals/{id}/toggle | 上/下架 |
 | GET | /api/merchant/orders | `?type=&status=` |
 | POST | /api/merchant/verify | `{code}` 核销券码 |
-| POST | /api/merchant/orders/{id}/advance | 外卖：已支付 → 配送中 → 已送达 |
+| POST | /api/merchant/orders/{id}/advance | 外卖出餐：paid → ready |
 
 ## 客户经理端（角色 manager）
 
@@ -75,6 +77,37 @@
 | GET | /api/manager/merchants | 绑定商家列表 + 每家订单数与佣金 |
 | POST | /api/manager/merchants/{id}/{action} | action = approve / reject |
 | GET | /api/manager/commissions | 佣金流水 |
+
+## 骑手端（学生兼职，rider_status = approved）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | /api/rider/apply | 登录学生申请加入外卖团队 |
+| GET | /api/rider/dashboard | 今日/累计收入、配送中、批次列表（每批：备餐中/待取餐/我配送中/已送达） |
+| GET | /api/rider/batch | `?date=&slot=` 取餐清单（按商家）+ 我的送达清单（按取餐点） |
+| POST | /api/rider/pickup | `{order_ids: []}` 批量取餐（ready → delivering） |
+| POST | /api/rider/deliver | `{order_ids: []}` 批量送达（→ completed，写分账） |
+| GET | /api/rider/earnings | 提成流水 |
+
+## 平台管理后台（角色 admin）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | /api/admin/dashboard | `?school_id=` KPI、近 7 天趋势、各校经营、待办 |
+| GET / POST | /api/admin/schools, /api/admin/schools/{id} | 学校列表 / 新增 / 编辑（状态、试点、送餐时间点、取餐点） |
+| GET | /api/admin/merchants | `?status=&school_id=&keyword=` |
+| POST | /api/admin/merchants/{id}/{action} | approve / reject / suspend / manager(`{manager_id}` 改推广归属) |
+| GET | /api/admin/deals | 比价抽查：含结算价、毛利、到手比例 |
+| POST | /api/admin/deals/{id}/toggle | 强制下架 / 恢复 |
+| GET | /api/admin/orders | 含分账快照 |
+| GET | /api/admin/ledger | 流水汇总 + 明细 `?party_type=` |
+| GET | /api/admin/users | `?role=&rider_status=&status=&keyword=` |
+| POST | /api/admin/users/{id} | `{role}` 设为客户经理（自动邀请码）/ `{rider_status}` / `{status: banned}` |
+| GET / POST | /api/admin/settings | 分成比例、最少便宜、配送费、骑手提成、截单、免审 |
+| GET / POST | /api/admin/faqs, /api/admin/faqs/{id}, /api/admin/faqs/{id}/delete | 知识库 |
+| GET | /api/admin/ai-logs | `?source=none` 未答上的提问 |
+| GET | /api/admin/treehole | `?reported=1&status=` 含真实身份与举报原因 |
+| POST | /api/admin/treehole/{id}/{action} | hide / restore（驳回举报） |
 
 ## AI 问答（预留）
 
@@ -88,3 +121,4 @@
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | POST | /api/dev/reset | dev 环境：重置全部演示数据 |
+| GET | /api/dev/coupons | dev 环境：商家查看本店待核销券码（演示辅助） |

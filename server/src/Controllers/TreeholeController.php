@@ -12,6 +12,8 @@ final class TreeholeController
     private const ADJ = ['安静的', '快乐的', '迷路的', '熬夜的', '干饭的', '温柔的', '勇敢的', '摸鱼的'];
     private const ANIMAL = ['水豚', '柴犬', '橘猫', '企鹅', '海鸥', '松鼠', '刺猬', '考拉'];
     private const BANNED = ['微信号', '加我', '代考', '刷单', '赌'];
+    public const REPORT_REASONS = ['人身攻击', '色情低俗', '广告引流', '虚假信息', '泄露隐私', '其他'];
+    private const AUTO_HIDE = 3;
 
     public function list(Request $req): array
     {
@@ -91,6 +93,26 @@ final class TreeholeController
         $id = Db::insert('treehole_comments', ['post_id' => $pid, 'user_id' => $req->user['id'], 'anon_name' => $anon, 'content' => $content]);
         Db::run('UPDATE treehole_posts SET comment_count = comment_count + 1 WHERE id = ?', [$pid]);
         return Db::one('SELECT id, anon_name, content, created_at FROM treehole_comments WHERE id = ?', [$id]);
+    }
+
+    /** 举报：同一用户对同一帖只能举报一次，累计达到阈值自动隐藏，等待后台复核 */
+    public function report(Request $req): array
+    {
+        $pid = (int) $req->params['id'];
+        $post = $this->post($pid);
+        $reason = $req->oneOf('reason', self::REPORT_REASONS);
+        if ((int) $post['user_id'] === (int) $req->user['id']) {
+            throw new HttpException('不能举报自己的帖子', 422);
+        }
+        if (Db::value('SELECT 1 FROM treehole_reports WHERE post_id = ? AND user_id = ?', [$pid, $req->user['id']])) {
+            throw new HttpException('你已举报过该内容', 422);
+        }
+        Db::transaction(function () use ($pid, $req, $reason) {
+            Db::insert('treehole_reports', ['post_id' => $pid, 'user_id' => $req->user['id'], 'reason' => $reason]);
+            Db::run('UPDATE treehole_posts SET report_count = report_count + 1 WHERE id = ?', [$pid]);
+            Db::run("UPDATE treehole_posts SET status = 'hidden' WHERE id = ? AND report_count >= ?", [$pid, self::AUTO_HIDE]);
+        });
+        return ['message' => '感谢反馈，我们会尽快处理'];
     }
 
     private function post(int $id): array

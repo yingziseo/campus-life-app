@@ -12,6 +12,8 @@ final class AuthController
         'student'  => '13800000001',
         'merchant' => '13800000002',
         'manager'  => '13800000003',
+        'rider'    => '13800000004',
+        'admin'    => '13800000000',
     ];
 
     /** 手机号 + 验证码登录。原型阶段验证码固定 1234，正式版接短信或微信 wx.login */
@@ -25,6 +27,9 @@ final class AuthController
             throw new HttpException('验证码错误（演示环境请输入 1234）', 422);
         }
         $user = Db::one('SELECT * FROM users WHERE phone = ?', [$phone]);
+        if ($user && $user['status'] === 'banned') {
+            throw new HttpException('账号已被限制使用，请联系平台', 403);
+        }
         if (!$user) {
             $id = Db::insert('users', ['phone' => $phone, 'nickname' => '同学' . substr($phone, -4), 'role' => 'student']);
             $user = Db::one('SELECT * FROM users WHERE id = ?', [$id]);
@@ -89,6 +94,7 @@ final class AuthController
             'role'        => $u['role'],
             'school'      => $school,
             'invite_code' => $u['role'] === 'manager' ? $u['invite_code'] : null,
+            'rider_status'=> $u['rider_status'],
             'merchant'    => $merchant,
         ];
     }

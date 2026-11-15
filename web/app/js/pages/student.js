@@ -277,7 +277,7 @@ defineRoute('/market', {
       <Empty v-else-if="!data?.length" text="暂无在售物品" icon="♻️" />
       <div class="deal-grid" style="margin-top:12px">
         <div v-for="i in data" :key="i.id" class="deal-card" @click="go('/market/' + i.id)">
-          <div class="cover" style="background:#f3f6f4">{{ marketEmoji(i.category) }}<span class="tag ok">{{ i.item_condition }}</span></div>
+          <Cover cls="cover" :src="i.images[0]" :emoji="marketEmoji(i.category)" bg="#f3f6f4"><span class="tag ok">{{ i.item_condition }}</span></Cover>
           <div class="body"><div class="title clamp2" style="min-height:38px">{{ i.title }}</div>
             <div class="row mt8"><span class="price"><small>¥</small>{{ yuan(i.price) }}</span><span v-if="i.original_price" class="strike">¥{{ yuan(i.original_price) }}</span></div>
             <div class="muted ellipsis">{{ i.nickname }} · {{ timeAgo(i.created_at) }}</div></div>
@@ -299,6 +299,7 @@ defineRoute('/market/new', {
       <div class="form">
         <div class="field"><label>标题</label><input v-model="f.title" placeholder="品牌型号，一句话说清楚"></div>
         <div class="field col"><label>描述</label><textarea v-model="f.description" placeholder="新旧程度、入手渠道、转手原因…"></textarea></div>
+        <div class="field col"><label>图片 <span class="muted">（最多 6 张，有图卖得更快）</span></label><ImagePicker v-model="f.images" :max="6" /></div>
       </div>
       <div class="form">
         <div class="field"><label>分类</label><div class="chips" style="justify-content:flex-end;flex:1">
@@ -309,11 +310,10 @@ defineRoute('/market/new', {
         <div class="field"><label>原价</label><input v-model="f.original_price" type="number" placeholder="选填"><span class="unit">元</span></div>
         <div class="field"><label>联系方式</label><input v-model="f.contact" placeholder="微信 / 手机"></div>
       </div>
-      <div class="hint">图片上传将在 v0.2 支持</div>
     </div>
     <div class="action-bar"><button class="btn block" :disabled="busy" @click="submit">发布</button></div>`,
   setup() {
-    const f = reactive({ title: '', description: '', category: 'book', item_condition: '9成新', price: '', original_price: '', contact: '' });
+    const f = reactive({ title: '', description: '', category: 'book', item_condition: '9成新', price: '', original_price: '', contact: '', images: [] });
     const busy = ref(false);
     return {
       f, busy, cats: MARKET_CATS.slice(1), conds: ['全新', '95新', '9成新', '8成新', '7成新'],
@@ -325,7 +325,9 @@ defineRoute('/market/new', {
 defineRoute('/market/:id', {
   template: `<NavBar title="宝贝详情" back="/market" />
     <div class="page" style="padding-bottom:90px" v-if="i">
-      <div style="height:220px;display:flex;align-items:center;justify-content:center;font-size:90px;background:#eef3ef">{{ marketEmoji(i.category) }}</div>
+      <div v-if="i.images.length" class="gallery"><img v-for="u in i.images" :key="u" :src="u" alt=""></div>
+      <div v-else style="height:220px;display:flex;align-items:center;justify-content:center;font-size:90px;background:#eef3ef">{{ marketEmoji(i.category) }}</div>
+      <div v-if="i.images.length > 1" class="muted center" style="margin-top:-30px;position:relative;color:#fff">左右滑动查看 {{ i.images.length }} 张</div>
       <div class="card" style="margin-top:-14px;position:relative">
         <div class="row"><span class="price lg"><small>¥</small>{{ yuan(i.price) }}</span><span v-if="i.original_price" class="strike">原价 ¥{{ yuan(i.original_price) }}</span>
           <span class="grow"></span><span :class="statusCls('market', i.status)">{{ statusText('market', i.status) }}</span></div>
@@ -360,6 +362,7 @@ const PostCard = {
   props: { p: Object, full: Boolean },
   emits: ['like'],
   components: { Icon },
+  methods: { report(p) { ReportSheet.post = p; } },
   template: `<div class="post" @click="!full && go('/treehole/' + p.id)" :style="{ cursor: full ? 'default' : 'pointer' }">
       <div class="post-head"><div class="avatar" :style="{ background: avatarColor(p.anon_name) }">{{ p.anon_name.slice(-2, -1) }}</div>
         <div class="grow"><div style="font-weight:600;font-size:13px">{{ p.anon_name }}</div><div class="muted">{{ timeAgo(p.created_at) }}</div></div>
@@ -368,9 +371,11 @@ const PostCard = {
       <div class="post-foot">
         <button :class="{ liked: p.liked }" @click.stop="$emit('like', p)"><Icon name="heart" :size="16" />{{ p.like_count || '点赞' }}</button>
         <button><Icon name="chat" :size="16" />{{ p.comment_count || '评论' }}</button>
+        <button v-if="full" style="margin-left:auto" @click.stop="report(p)">举报</button>
       </div>
     </div>`,
 };
+const ReportSheet = reactive({ post: null });
 async function toggleLike(p) {
   try { const r = await post(`/treehole/${p.id}/like`); p.liked = r.liked; p.like_count = r.like_count; } catch (e) {}
 }
@@ -427,12 +432,23 @@ defineRoute('/treehole/:id', {
         </div>
       </div>
     </div>
-    <div class="chat-input"><input v-model="text" maxlength="200" placeholder="友善评论…" @keyup.enter="send"><button class="btn" :disabled="!text.trim()" @click="send">发送</button></div>`,
+    <div class="chat-input"><input v-model="text" maxlength="200" placeholder="友善评论…" @keyup.enter="send"><button class="btn" :disabled="!text.trim()" @click="send">发送</button></div>
+    <div v-if="rs.post" class="mask" @click.self="rs.post = null"><div class="sheet">
+      <div class="sheet-title">举报原因</div>
+      <div class="chips" style="justify-content:center"><span v-for="r in reasons" :key="r" class="chip" @click="doReport(r)">{{ r }}</span></div>
+      <p class="muted center">累计多人举报的内容会自动隐藏，等待平台复核</p>
+      <button class="btn line block" @click="rs.post = null">取消</button>
+    </div></div>`,
   setup() {
     const { data } = useLoad(() => api(`/treehole/${store.route.params.id}/comments`));
     const text = ref('');
+    ReportSheet.post = null;
     return {
-      data, text,
+      data, text, rs: ReportSheet, reasons: ['人身攻击', '色情低俗', '广告引流', '虚假信息', '泄露隐私', '其他'],
+      async doReport(reason) {
+        const p = ReportSheet.post; ReportSheet.post = null;
+        try { const r = await post(`/treehole/${p.id}/report`, { reason }); toast(r.message); } catch (e) {}
+      },
       toggleLike: async (p) => { await toggleLike(p); },
       async send() {
         try { const c = await post(`/treehole/${data.value.post.id}/comments`, { content: text.value }); data.value.comments.push(c); data.value.post.comment_count++; text.value = ''; } catch (e) {}
@@ -494,11 +510,14 @@ defineRoute('/me', {
           <div class="cell" @click="go('/errands?type=mine')"><Icon name="swap" :size="18"/><span class="grow">我的跑腿</span><Icon name="right" :size="14" class="arrow"/></div>
           <div class="cell" @click="go('/school')"><Icon name="location" :size="18"/><span class="grow">切换学校</span><span class="muted">{{ u.school?.short_name }}</span><Icon name="right" :size="14" class="arrow"/></div>
         </template>
+        <div class="cell" v-if="u.rider_status === 'approved'" @click="go('/r')"><span style="font-size:18px">🛵</span><span class="grow">骑手工作台</span><span class="tag primary">外卖团队</span><Icon name="right" :size="14" class="arrow"/></div>
         <div class="cell" v-if="u.role === 'merchant'" @click="go('/m/shop')"><Icon name="store" :size="18"/><span class="grow">店铺设置</span><Icon name="right" :size="14" class="arrow"/></div>
         <div class="cell" v-if="u.role === 'manager'" @click="go('/g')"><Icon name="chart" :size="18"/><span class="grow">我的邀请码</span><b style="letter-spacing:2px">{{ u.invite_code }}</b><Icon name="right" :size="14" class="arrow"/></div>
         <div class="cell" @click="go('/ai')"><Icon name="chat" :size="18"/><span class="grow">问一问 · 帮助中心</span><Icon name="right" :size="14" class="arrow"/></div>
       </div>
       <div class="card flush" v-if="u.role === 'student'">
+        <div class="cell" v-if="u.rider_status !== 'approved'" @click="joinRider"><span style="font-size:18px">🛵</span><span class="grow">加入校园外卖团队</span>
+          <span class="muted">{{ u.rider_status === 'pending' ? '审核中' : '课余兼职，每单提成' }}</span><Icon name="right" :size="14" class="arrow"/></div>
         <div class="cell" @click="go('/merchant-apply')"><span style="font-size:18px">🏪</span><span class="grow">商家入驻</span><span class="muted">比美团更低抽佣</span><Icon name="right" :size="14" class="arrow"/></div>
       </div>
       <div class="card flush">
@@ -512,6 +531,11 @@ defineRoute('/me', {
     const roleName = computed(() => ({ student: '学生', merchant: '商家', manager: '客户经理', admin: '管理员' })[u.value.role]);
     return {
       u, roleName,
+      async joinRider() {
+        if (u.value.rider_status === 'pending') return toast('申请审核中，请耐心等待');
+        if (!(await confirmBox('加入校园外卖团队', '每天固定时间点集中配送，送一单提成 1 元，课余时间就能做。\n提交后由平台审核。', '提交申请'))) return;
+        try { await post('/rider/apply'); await refreshMe(); toast('申请已提交'); } catch (e) {}
+      },
       async editName() {
         const name = prompt('新的昵称', u.value.nickname);
         if (!name) return;

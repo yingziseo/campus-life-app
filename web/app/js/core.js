@@ -76,6 +76,35 @@ async function api(path, { method = 'GET', body, silent = false, query } = {}) {
 }
 const post = (path, body, opt = {}) => api(path, { ...opt, method: 'POST', body: body || {} });
 
+/** 图片上传：前端先压缩到最长边 1280px 的 JPEG，再以 multipart 上传；返回 /uploads/... 地址 */
+async function uploadImage(file) {
+  const blob = await compressImage(file, 1280, 0.82);
+  const fd = new FormData();
+  fd.append('file', blob, 'image.jpg');
+  const res = await fetch('/api/upload', { method: 'POST', headers: { Authorization: 'Bearer ' + store.token }, body: fd });
+  const json = await res.json().catch(() => ({ code: -1, msg: '上传失败' }));
+  if (json.code !== 0) { toast(json.msg || '上传失败'); throw new ApiError(json.msg, json.code); }
+  return json.data.url;
+}
+function compressImage(file, maxSide, quality) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.width * scale); c.height = Math.round(img.height * scale);
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+      ctx.drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      c.toBlob((b) => (b ? resolve(b) : reject(new Error('压缩失败'))), 'image/jpeg', quality);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('无法读取图片')); toast('无法读取该图片'); };
+    img.src = url;
+  });
+}
+
 function setToken(t) { store.token = t; safeSet('token', t); }
 
 async function refreshMe() {
@@ -84,11 +113,13 @@ async function refreshMe() {
   return store.user;
 }
 function applyRoleTheme() {
-  document.body.className = store.user ? 'role-' + store.user.role : '';
+  const riderPage = store.route.route?.meta.tabs === 'rider';
+  document.body.className = store.user ? 'role-' + (riderPage ? 'rider' : store.user.role) : '';
 }
 function roleHome(role) {
-  return { merchant: '/m', manager: '/g' }[role] || '/';
+  return { merchant: '/m', manager: '/g', rider: '/r' }[role] || '/';
 }
+const isRider = () => store.user?.rider_status === 'approved';
 
 /* ---------------- 路由（hash） ---------------- */
 const routes = [];
@@ -130,10 +161,12 @@ function syncRoute() {
   if (!meta.guest && !store.user) return go('/login', true);
   if (store.user) {
     if (meta.role && meta.role !== store.user.role) return go(roleHome(store.user.role), true);
+    if (meta.rider && !isRider()) return go('/me', true);
     if (!meta.guest && meta.school !== false && store.user.role === 'student' && !store.user.school && r.path !== '/school') return go('/school', true);
   }
   store.route = r;
-  try { parent !== window && parent.postMessage({ type: 'campus-route', path: r.full, role: store.user?.role || '' }, '*'); } catch (e) {}
+  applyRoleTheme();
+  try { parent !== window && parent.postMessage({ type: 'campus-route', path: r.full, role: meta.tabs === 'rider' ? 'rider' : store.user?.role || '' }, '*'); } catch (e) {}
 }
 window.addEventListener('hashchange', () => { store.navDepth++; syncRoute(); });
 
@@ -169,14 +202,14 @@ const AVATAR_COLORS = ['#ff8a5b', '#5b9dff', '#36c28a', '#a07cff', '#ffb648', '#
 const avatarColor = (s = '') => AVATAR_COLORS[[...s].reduce((a, c) => a + c.charCodeAt(0), 0) % AVATAR_COLORS.length];
 
 const STATUS = {
-  order: { pending_pay: ['待支付', 'warn'], paid: ['待使用', 'primary'], delivering: ['配送中', 'primary'], completed: ['已完成', 'ok'], cancelled: ['已取消', ''], refunded: ['已退款', ''] },
+  order: { pending_pay: ['待支付', 'warn'], paid: ['待使用', 'primary'], ready: ['待取餐', 'primary'], delivering: ['配送中', 'primary'], completed: ['已完成', 'ok'], cancelled: ['已取消', ''], refunded: ['已退款', ''] },
   errand: { open: ['待接单', 'warn'], accepted: ['已接单', 'primary'], delivered: ['已送达', 'primary'], completed: ['已完成', 'ok'], cancelled: ['已取消', ''] },
   merchant: { pending: ['待审核', 'warn'], approved: ['已通过', 'ok'], rejected: ['已驳回', ''] },
   market: { on_sale: ['在售', 'ok'], reserved: ['已预订', 'warn'], sold: ['已售出', ''], off: ['已下架', ''] },
 };
 const statusText = (type, s) => (STATUS[type]?.[s] || [s])[0];
 /** 订单状态文案区分团购/外卖：外卖已支付显示"待配送" */
-const orderStatus = (o) => (o.type === 'takeout' && o.status === 'paid' ? '待配送' : statusText('order', o.status));
+const orderStatus = (o) => (o.type === 'takeout' && o.status === 'paid' ? '商家备餐中' : o.type === 'takeout' && o.status === 'ready' ? '已出餐，待骑手取餐' : statusText('order', o.status));
 const statusCls = (type, s) => 'tag ' + ((STATUS[type]?.[s] || [])[1] || '');
 
 /* ---------------- 图标 ---------------- */
@@ -235,6 +268,11 @@ const TABS = {
     { key: 'm-orders', text: '订单', icon: 'receipt', path: '/m/orders' },
     { key: 'me', text: '我的', icon: 'user', path: '/me' },
   ],
+  rider: [
+    { key: 'r-home', text: '配送任务', icon: 'clock', path: '/r' },
+    { key: 'r-earnings', text: '我的收入', icon: 'wallet', path: '/r/earnings' },
+    { key: 'back', text: '学生端', icon: 'swap', path: '/' },
+  ],
   manager: [
     { key: 'g-home', text: '概览', icon: 'chart', path: '/g' },
     { key: 'g-merchants', text: '商家', icon: 'store', path: '/g/merchants' },
@@ -244,7 +282,7 @@ const TABS = {
   ],
 };
 const TabBar = {
-  props: { active: String },
+  props: { active: String, set: String },
   components: { Icon },
   template: `<nav class="tabbar">
       <button v-for="t in tabs" :key="t.key" class="tab" :class="{ on: t.key === active }" @click="tap(t)">
@@ -252,7 +290,7 @@ const TabBar = {
         <template v-else><Icon :name="t.icon" /><span>{{ t.text }}</span></template>
       </button>
     </nav>`,
-  computed: { tabs() { return TABS[store.user?.role] || TABS.student; } },
+  computed: { tabs() { return TABS[this.set || store.user?.role] || TABS.student; } },
   methods: { tap(t) { t.action ? (store.sheet = t.action) : go(t.path, true); } },
 };
 
@@ -289,5 +327,40 @@ const PublishSheet = {
   },
 };
 
-const Globals = { Icon, NavBar, TabBar, Empty, Steps };
+/** 多图选择上传（max=1 时为单图） */
+const ImagePicker = {
+  props: { modelValue: { type: [Array, String], default: () => [] }, max: { type: Number, default: 6 }, label: { type: String, default: '添加图片' } },
+  emits: ['update:modelValue'],
+  template: `<div class="pics">
+      <div v-for="(u, i) in list" :key="u" class="pic"><img :src="u" alt=""><button class="pic-del" @click="remove(i)" aria-label="删除">×</button></div>
+      <label v-if="list.length < max" class="pic add" :class="{ busy }">
+        <input type="file" accept="image/*" :multiple="max > 1" @change="pick" hidden>
+        <span>{{ busy ? '上传中…' : '＋' }}</span><small v-if="!busy">{{ label }}</small>
+      </label>
+    </div>`,
+  setup(props, { emit }) {
+    const busy = ref(false);
+    const list = computed(() => (Array.isArray(props.modelValue) ? props.modelValue : props.modelValue ? [props.modelValue] : []));
+    const emitList = (arr) => emit('update:modelValue', props.max === 1 ? (arr[0] || '') : arr);
+    async function pick(e) {
+      const files = [...e.target.files].slice(0, props.max - list.value.length);
+      e.target.value = '';
+      if (!files.length) return;
+      busy.value = true;
+      const out = [...list.value];
+      try { for (const f of files) out.push(await uploadImage(f)); } catch (err) {}
+      busy.value = false;
+      emitList(out);
+    }
+    return { list, busy, pick, remove: (i) => emitList(list.value.filter((_, j) => j !== i)) };
+  },
+};
+
+/** 有图显示图片，没图用品类 emoji 占位 */
+const Cover = {
+  props: { src: String, emoji: String, bg: String, cls: { type: String, default: '' } },
+  template: `<div :class="cls" :style="{ background: src ? '#eee' : bg }" class="cover-box"><img v-if="src" :src="src" alt="" loading="lazy"><template v-else>{{ emoji }}</template><slot /></div>`,
+};
+
+const Globals = { Icon, NavBar, TabBar, Empty, Steps, ImagePicker, Cover };
 const helpers = { orderStatus, yuan, pct, timeAgo, shortTime, catOf, avatarColor, statusText, statusCls, store };
