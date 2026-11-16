@@ -11,5 +11,5 @@ server/config.local.php
 .DS_Store
 .idea/
 .vscode/
-node_modules/
+node_modules
 tests/e2e/shots/

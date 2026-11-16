@@ -4,8 +4,13 @@ declare(strict_types=1);
 namespace App\Controllers;
 
 use App\Core\{Auth, Db, HttpException, Request};
+use App\Services\{Ledger, Settings};
 
-/** 跑腿 & 代取快递 */
+/**
+ * 跑腿 & 代取快递
+ * 赏金在发布时预付托管（原型为模拟支付），完成后打给接单人，平台抽 errand_fee_rate 服务费；
+ * 接单人送达时须拍照上传留证。
+ */
 final class ErrandController
 {
     private const SELECT = 'SELECT e.*, u.nickname AS user_nickname, r.nickname AS runner_nickname
@@ -56,6 +61,8 @@ final class ErrandController
             'pickup_addr'  => $req->str('pickup_addr', 60),
             'deliver_addr' => $req->str('deliver_addr', 60, true, '送达地点'),
             'reward'       => $reward,
+            'fee'          => Ledger::fee($reward, 'errand_fee_rate'),
+            'paid_at'      => now(),
         ];
         if ($type === 'express') {
             $data['express_station'] = $req->str('express_station', 40, true, '快递驿站');
@@ -86,15 +93,25 @@ final class ErrandController
                 break;
             case 'deliver':
                 if (!$isRunner || $e['status'] !== 'accepted') throw new HttpException('当前状态不可操作', 422);
-                Db::update('errands', ['status' => 'delivered'], 'id = :id', ['id' => $e['id']]);
+                $proof = UploadController::checkUrl($req->str('proof_image', 200));
+                if (!$proof) throw new HttpException('请拍照上传送达凭证', 422);
+                Db::update('errands', ['status' => 'delivered', 'proof_image' => $proof, 'delivered_at' => now()], 'id = :id', ['id' => $e['id']]);
                 break;
             case 'complete':
                 if (!$isOwner || !in_array($e['status'], ['accepted', 'delivered'], true)) throw new HttpException('当前状态不可操作', 422);
-                Db::update('errands', ['status' => 'completed', 'completed_at' => now()], 'id = :id', ['id' => $e['id']]);
+                Db::transaction(static function () use ($e) {
+                    $n = Db::run("UPDATE errands SET status = 'completed', completed_at = ? WHERE id = ? AND status IN ('accepted','delivered')", [now(), $e['id']])->rowCount();
+                    if (!$n) throw new HttpException('当前状态不可操作', 422);
+                    $sid = (int) $e['school_id'];
+                    $label = ($e['type'] === 'express' ? '代取快递 · ' : '跑腿 · ') . $e['title'];
+                    Ledger::add('errand', $sid, 'student', (int) $e['runner_id'], $e['reward'] - $e['fee'], 'errand_reward', $label, null, (int) $e['id']);
+                    Ledger::add('errand', $sid, 'platform', null, (int) $e['fee'], 'errand_fee', $label, null, (int) $e['id']);
+                });
                 break;
             case 'cancel':
                 if (!$isOwner || $e['status'] !== 'open') throw new HttpException('已被接单，请联系接单人协商', 422);
-                Db::update('errands', ['status' => 'cancelled'], 'id = :id', ['id' => $e['id']]);
+                // 托管赏金原路退回（原型不产生流水）
+                Db::run("UPDATE errands SET status = 'cancelled' WHERE id = ? AND status = 'open'", [$e['id']]);
                 break;
             default:
                 throw new HttpException('未知操作', 404);
@@ -119,7 +136,10 @@ final class ErrandController
         $e['is_runner'] = (int) $e['runner_id'] === $uid;
         if (!$e['is_owner'] && !$e['is_runner']) {
             $e['express_code'] = $e['express_code'] ? '接单后可见' : null;
+            $e['proof_image'] = null;
         }
+        $e['runner_income'] = $e['reward'] - $e['fee'];
+        $e['fee_rate'] = (float) Settings::get('errand_fee_rate');
         return $e;
     }
 }

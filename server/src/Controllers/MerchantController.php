@@ -4,7 +4,7 @@ declare(strict_types=1);
 namespace App\Controllers;
 
 use App\Core\{Auth, Db, HttpException, Request};
-use App\Services\{OrderService, PricingService, Settings};
+use App\Services\{OrderService, PricingService, PromotionService, Settings};
 
 /** 商家端 */
 final class MerchantController
@@ -79,7 +79,7 @@ final class MerchantController
         $mid = $m['id'];
         return [
             'merchant' => $this->merchantById((int) $mid),
-            'today_orders'  => (int) Db::value("SELECT COUNT(*) FROM orders WHERE merchant_id = ? AND status IN ('paid','delivering','completed') AND date(paid_at) = ?", [$mid, $today]),
+            'today_orders'  => (int) Db::value("SELECT COUNT(*) FROM orders WHERE merchant_id = ? AND status IN ('paid','ready','delivering','completed') AND date(paid_at) = ?", [$mid, $today]),
             'today_income'  => (int) Db::value("SELECT COALESCE(SUM(amount),0) FROM ledger WHERE party_type = 'merchant' AND party_id = ? AND date(created_at) = ?", [$mid, $today]),
             'total_income'  => (int) Db::value("SELECT COALESCE(SUM(amount),0) FROM ledger WHERE party_type = 'merchant' AND party_id = ?", [$mid]),
             'unused_coupons'=> (int) Db::value("SELECT COUNT(*) FROM coupons c JOIN orders o ON o.id = c.order_id WHERE o.merchant_id = ? AND c.status = 'unused' AND o.status = 'paid'", [$mid]),
@@ -189,6 +189,38 @@ final class MerchantController
     {
         $m = $this->current($req, true);
         return OrderService::markReady($m, (int) $req->params['id']);
+    }
+
+    /* ---------- 首页推荐位（商家购买广告） ---------- */
+
+    /** 我的推广 + 可购买的行业推荐位（本店类目；开通外卖的再加"校园外卖"） */
+    public function promotions(Request $req): array
+    {
+        $m = $this->current($req);
+        $cats = [$m['category']];
+        if ($m['takeout_enabled']) {
+            $cats[] = 'takeout';
+        }
+        return [
+            'mine' => Db::all(
+                'SELECT p.*, d.title AS deal_title FROM promotions p JOIN deals d ON d.id = p.deal_id WHERE p.merchant_id = ? ORDER BY p.id DESC',
+                [$m['id']]
+            ),
+            'categories' => array_map(static fn($c) => [
+                'category' => $c,
+                'name'     => PromotionService::CATEGORIES[$c] ?? $c,
+                'slots'    => PromotionService::slots((int) $m['school_id'], $c),
+            ], $cats),
+            'deals' => Db::all("SELECT id, title, type, sale_price, sold FROM deals WHERE merchant_id = ? AND status = 'on' ORDER BY sold DESC", [$m['id']]),
+            'today' => date('Y-m-d'),
+        ];
+    }
+
+    /** 购买推荐位（模拟支付广告费 → 平台审核后生效） */
+    public function buyPromotion(Request $req): array
+    {
+        $m = $this->current($req, true);
+        return PromotionService::create($m, $req->int('deal_id'), $req->int('position'), $req->int('days', 7), $req->str('start_date', 10) ?: date('Y-m-d'));
     }
 
     private function current(Request $req, bool $mustApproved = false): array

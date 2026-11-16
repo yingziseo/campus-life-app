@@ -5,12 +5,12 @@ const CHROMIUM = process.env.CHROMIUM_PATH || '/usr/bin/chromium-browser';
 const fs = require('fs');
 fs.mkdirSync(__dirname + '/shots', { recursive: true });
 const PAGES = {
-  student: ['/', '/local', '/local?cat=takeout', '/local/merchant/1', '/local/deal/1', '/local/deal/2', '/errands?type=errand', '/errands?type=express', '/errands/1', '/errands/new?type=express', '/market', '/market/1', '/market/new', '/treehole', '/treehole/1', '/treehole/new', '/ai', '/orders', '/me', '/merchant-apply', '/school'],
-  merchant: ['/m', '/m/deals', '/m/deal/new', '/m/deal/1', '/m/verify', '/m/orders', '/m/orders?type=takeout', '/m/shop', '/me'],
+  student: ['/', '/coupons', '/coupons?tab=mine', '/local', '/local?cat=takeout', '/local/merchant/1', '/local/deal/1', '/local/deal/2', '/errands?type=errand', '/errands?type=express', '/errands/1', '/errands/6', '/errands/new?type=express', '/market', '/market/1', '/market/8', '/market/new', '/market/orders', '/treehole', '/treehole/1', '/treehole/new', '/ai', '/orders', '/wallet', '/me', '/merchant-apply', '/school'],
+  merchant: ['/m', '/m/deals', '/m/deal/new', '/m/deal/1', '/m/verify', '/m/orders', '/m/orders?type=takeout', '/m/shop', '/m/promote', '/me'],
   manager: ['/g', '/g/merchants', '/g/calc', '/g/commissions', '/me'],
   rider: ['/r', '/r/earnings', '/me'],
 };
-const ADMIN = ['dashboard', 'schools', 'merchants', 'deals', 'orders', 'ledger', 'users', 'treehole', 'faqs', 'settings'];
+const ADMIN = ['dashboard', 'revenue', 'orders', 'ledger', 'merchants', 'deals', 'promotions', 'coupons', 'schools', 'users', 'treehole', 'faqs', 'settings'];
 (async () => {
   const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
   const errors = [];
@@ -26,7 +26,7 @@ const ADMIN = ['dashboard', 'schools', 'merchants', 'deals', 'orders', 'ledger',
       await page.waitForTimeout(450);
       const name = `${role}${p.replace(/[\/?=&]/g, '_')}`;
       const text = await page.evaluate(() => document.querySelector('.shell')?.innerText || '');
-      if (/加载中…$/.test(text.trim()) || text.includes('页面走丢了')) errors.push(`[${role}] ${p}: 页面异常 -> ${text.slice(0, 80)}`);
+      if (/加载中$/.test(text.trim()) || text.includes('页面走丢了')) errors.push(`[${role}] ${p}: 页面异常 -> ${text.slice(0, 80)}`);
       await page.screenshot({ path: `${__dirname}/shots/${name}.png` });
     }
     await ctx.close();
@@ -41,7 +41,7 @@ const ADMIN = ['dashboard', 'schools', 'merchants', 'deals', 'orders', 'ledger',
   await page.waitForTimeout(600);
   await page.click('text=微信支付');
   await page.waitForTimeout(600);
-  const codes = await page.$$eval('.coupon .code', (els) => els.map((e) => e.textContent));
+  const codes = await page.$$eval('.ticket .code', (els) => els.map((e) => e.textContent));
   console.log('flow coupons:', codes);
   await page.screenshot({ path: __dirname + '/shots/flow_paid.png' });
   // 外卖
@@ -53,7 +53,7 @@ const ADMIN = ['dashboard', 'schools', 'merchants', 'deals', 'orders', 'ledger',
   await page.click('text=微信支付');
   await page.waitForTimeout(600);
   await page.screenshot({ path: __dirname + '/shots/flow_takeout.png' });
-  console.log('takeout:', (await page.innerText('.card')).replace(/\n/g, ' | ').slice(0, 120));
+  console.log('takeout:', (await page.innerText('.page')).replace(/\n/g, ' | ').slice(0, 160));
   // 管理后台逐页
   const adm = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   adm.on('pageerror', (e) => errors.push(`[admin] pageerror: ${e.message}`));

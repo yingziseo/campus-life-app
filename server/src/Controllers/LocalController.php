@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace App\Controllers;
 
 use App\Core\{Auth, Db, HttpException, Request};
+use App\Services\PromotionService;
 
 /** 周边本地生活（学生视角） */
 final class LocalController
@@ -26,16 +27,29 @@ final class LocalController
             $where[] = 'm.name LIKE ?';
             $params[] = "%$kw%";
         }
+        // 排序：本行业推荐位(广告)在前，其余按销量
+        $today = date('Y-m-d');
+        $adCat = $cat && isset(PromotionService::CATEGORIES[$cat]) ? $cat : null;
         $rows = Db::all(
             "SELECT m.id, m.name, m.category, m.address, m.intro, m.distance_m, m.takeout_enabled, m.cover,
                     MIN(d.sale_price) AS min_price,
                     MAX(d.competitor_price - d.sale_price) AS max_saving,
-                    COALESCE(SUM(d.sold), 0) AS sold
+                    COALESCE(SUM(d.sold), 0) AS sold,
+                    (SELECT MIN(p.position) FROM promotions p WHERE p.merchant_id = m.id AND p.status = 'active'
+                       AND p.start_date <= '$today' AND p.end_date >= '$today'" . ($adCat ? ' AND p.category = ' . Db::pdo()->quote($adCat) : '') . ") AS ad_position
              FROM merchants m LEFT JOIN deals d ON d.merchant_id = m.id AND d.status = 'on'
-             WHERE " . implode(' AND ', $where) . ' GROUP BY m.id ORDER BY sold DESC, m.id',
+             WHERE " . implode(' AND ', $where) . ' GROUP BY m.id ORDER BY ad_position IS NULL, ad_position, sold DESC, m.id',
             $params
         );
-        return $rows;
+        return array_map(static fn($r) => $r + ['is_ad' => $r['ad_position'] !== null], $rows);
+    }
+
+    /** 推荐商品（首页"热门推荐"分行业 tab）：推荐位在前，其余按销量 */
+    public function recommend(Request $req): array
+    {
+        $sid = Auth::schoolId($req);
+        $cat = $req->str('category', 12);
+        return self::publicDeals(PromotionService::recommend($sid, $cat, $req->int('limit', 6)));
     }
 
     public function merchant(Request $req): array
@@ -90,10 +104,13 @@ final class LocalController
                 'sold'             => (int) $d['sold'],
                 'stock'            => (int) $d['stock'],
             ];
+            if (array_key_exists('ad_position', $d)) {
+                $out['is_ad'] = $d['ad_position'] !== null;
+            }
             if ($d['pricing_mode'] === 'voucher') {
                 $out['voucher_label'] = sprintf('%s元抵%s元', \App\Services\PricingService::yuan((int) $d['voucher_cost']), \App\Services\PricingService::yuan((int) $d['voucher_face']));
             }
-            foreach (['merchant_name', 'category', 'address'] as $k) {
+            foreach (['merchant_name', 'category', 'address', 'merchant_cover', 'rec_category'] as $k) {
                 if (isset($d[$k])) {
                     $out[$k] = $d[$k];
                 }

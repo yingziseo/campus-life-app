@@ -4,7 +4,7 @@ declare(strict_types=1);
 namespace App\Controllers;
 
 use App\Core\{Db, HttpException, Request};
-use App\Services\Settings;
+use App\Services\{CouponService, Ledger, PricingService, PromotionService, Settings};
 
 /** 平台管理后台（角色 admin） */
 final class AdminController
@@ -16,9 +16,14 @@ final class AdminController
     {
         $sid = $req->int('school_id');
         $w = $sid ? ' AND o.school_id = ' . $sid : '';
+        $lw = $sid ? ' AND l.school_id = ' . $sid : '';
         $ledger = static fn(string $party) => (int) Db::value(
-            "SELECT COALESCE(SUM(l.amount),0) FROM ledger l JOIN orders o ON o.id = l.order_id WHERE l.party_type = ?$w", [$party]
+            "SELECT COALESCE(SUM(l.amount),0) FROM ledger l WHERE l.party_type = ?$lw", [$party]
         );
+        $income = [];
+        foreach (Db::all("SELECT l.kind, SUM(l.amount) AS amount FROM ledger l WHERE l.party_type = 'platform'$lw GROUP BY l.kind") as $r) {
+            $income[$r['kind']] = (int) $r['amount'];
+        }
         $daily = Db::all(
             "SELECT date(o.paid_at) AS day, COUNT(*) AS orders, SUM(o.goods_amount) AS gmv, SUM(o.competitor_amount - o.goods_amount) AS saved
              FROM orders o WHERE o.status IN " . self::PAID . " AND o.paid_at >= date('now','localtime','-6 day')$w GROUP BY day ORDER BY day"
@@ -37,15 +42,17 @@ final class AdminController
                 'merchants'       => (int) Db::value("SELECT COUNT(*) FROM merchants WHERE status = 'approved'" . ($sid ? " AND school_id = $sid" : '')),
                 'orders'          => (int) Db::value("SELECT COUNT(*) FROM orders o WHERE o.status IN " . self::PAID . $w),
                 'gmv'             => (int) Db::value("SELECT COALESCE(SUM(o.goods_amount),0) FROM orders o WHERE o.status IN " . self::PAID . $w),
-                'user_saved'      => (int) Db::value("SELECT COALESCE(SUM(o.competitor_amount - o.goods_amount),0) FROM orders o WHERE o.status IN " . self::PAID . $w),
+                'user_saved'      => (int) Db::value("SELECT COALESCE(SUM(o.competitor_amount - o.goods_amount + o.coupon_discount),0) FROM orders o WHERE o.status IN " . self::PAID . $w),
                 'platform_income' => $ledger('platform'),
                 'manager_income'  => $ledger('manager'),
                 'rider_income'    => $ledger('rider'),
                 'merchant_income' => $ledger('merchant'),
+                'student_income'  => $ledger('student'),
                 'errands'         => (int) Db::value('SELECT COUNT(*) FROM errands' . ($sid ? " WHERE school_id = $sid" : '')),
                 'treehole_posts'  => (int) Db::value('SELECT COUNT(*) FROM treehole_posts' . ($sid ? " WHERE school_id = $sid" : '')),
             ],
             'daily' => array_values($days),
+            'income' => array_map(static fn($k, $t) => ['kind' => $k, 'title' => $t, 'amount' => $income[$k] ?? 0], array_keys(Ledger::PLATFORM_KINDS), Ledger::PLATFORM_KINDS),
             'schools' => Db::all(
                 "SELECT s.id, s.name, s.status, s.is_pilot,
                     (SELECT COUNT(*) FROM users u WHERE u.school_id = s.id AND u.role = 'student') AS students,
@@ -60,6 +67,7 @@ final class AdminController
                 'pending_riders'    => (int) Db::value("SELECT COUNT(*) FROM users WHERE rider_status = 'pending'"),
                 'reported_posts'    => (int) Db::value('SELECT COUNT(*) FROM treehole_posts WHERE report_count > 0'),
                 'unanswered'        => (int) Db::value("SELECT COUNT(*) FROM ai_logs WHERE source = 'none'"),
+                'pending_promotions'=> (int) Db::value("SELECT COUNT(*) FROM promotions WHERE status = 'pending'"),
             ],
         ];
     }
@@ -169,15 +177,15 @@ final class AdminController
 
     public function ledger(Request $req): array
     {
-        [$where, $params] = $this->filters($req, ['party_type' => 'l.party_type'], 'o.order_no');
+        [$where, $params] = $this->filters($req, ['party_type' => 'l.party_type', 'source' => 'l.source', 'school_id' => 'l.school_id'], 'o.order_no', 'l.remark');
         [$limit, $offset] = $req->page();
         return [
             'summary' => Db::all('SELECT party_type, kind, COUNT(*) AS n, SUM(amount) AS amount FROM ledger GROUP BY party_type, kind ORDER BY party_type'),
             'rows' => Db::all(
                 "SELECT l.*, o.order_no, o.title,
                     CASE l.party_type WHEN 'merchant' THEN m.name WHEN 'platform' THEN '平台' ELSE u.nickname END AS party_name
-                 FROM ledger l JOIN orders o ON o.id = l.order_id LEFT JOIN merchants m ON l.party_type = 'merchant' AND m.id = l.party_id
-                 LEFT JOIN users u ON l.party_type IN ('manager','rider') AND u.id = l.party_id
+                 FROM ledger l LEFT JOIN orders o ON o.id = l.order_id LEFT JOIN merchants m ON l.party_type = 'merchant' AND m.id = l.party_id
+                 LEFT JOIN users u ON l.party_type IN ('manager','rider','student') AND u.id = l.party_id
                  $where ORDER BY l.id DESC LIMIT $limit OFFSET $offset",
                 $params
             ),
@@ -242,6 +250,8 @@ final class AdminController
             'delivery_fee'           => [0, 2000],
             'rider_commission'       => [0, 2000],
             'takeout_cutoff_minutes' => [0, 240],
+            'errand_fee_rate'        => [0, 0.3],
+            'market_fee_rate'        => [0, 0.2],
         ];
         foreach ($rules as $key => [$min, $max]) {
             $v = $req->input($key);
@@ -251,7 +261,26 @@ final class AdminController
             if (!is_numeric($v) || $v < $min || $v > $max) {
                 throw new HttpException("参数 {$key} 需在 {$min}~{$max} 之间", 422);
             }
-            Settings::set($key, $key === 'manager_rate' ? round((float) $v, 4) : (int) $v);
+            Settings::set($key, str_ends_with($key, '_rate') ? round((float) $v, 4) : (int) $v);
+        }
+        if (is_array($prices = $req->input('ad_prices'))) {
+            $prices = array_map('intval', array_slice(array_values($prices), 0, PromotionService::POSITIONS));
+            if (count($prices) !== PromotionService::POSITIONS || min($prices) < 0 || max($prices) > 1000000) {
+                throw new HttpException('推荐位价格不合法', 422);
+            }
+            Settings::set('ad_prices', $prices);
+        }
+        foreach (['price_slogan' => 12, 'compare_label' => 8, 'group_name' => 20, 'group_desc' => 60] as $key => $max) {
+            if ($req->input($key) !== null) {
+                $v = $req->str($key, $max);
+                if ($v === '') {
+                    throw new HttpException('文案不能为空', 422);
+                }
+                Settings::set($key, $v);
+            }
+        }
+        if ($req->input('group_qr') !== null) {
+            Settings::set('group_qr', UploadController::checkUrl($req->str('group_qr', 200)) ?? '');
         }
         if ($req->input('merchant_auto_approve') !== null) {
             Settings::set('merchant_auto_approve', (bool) $req->input('merchant_auto_approve'));
@@ -293,6 +322,155 @@ final class AdminController
     {
         [$where, $params] = $this->filters($req, ['source' => 'l.source'], 'l.question');
         return Db::all("SELECT l.*, u.nickname FROM ai_logs l LEFT JOIN users u ON u.id = l.user_id $where ORDER BY l.id DESC LIMIT 200", $params);
+    }
+
+    /* ---------- 收益分配：平台怎么赚钱、钱分给了谁 ---------- */
+    public function revenue(Request $req): array
+    {
+        $sid = $req->int('school_id');
+        $lw = $sid ? ' WHERE school_id = ' . $sid : '';
+        $parties = [];
+        foreach (Db::all("SELECT party_type, kind, COUNT(*) AS n, SUM(amount) AS amount FROM ledger$lw GROUP BY party_type, kind") as $r) {
+            $parties[$r['party_type']][$r['kind']] = ['n' => (int) $r['n'], 'amount' => (int) $r['amount']];
+        }
+        $platform = [];
+        foreach (Ledger::PLATFORM_KINDS as $k => $title) {
+            $platform[] = ['kind' => $k, 'title' => $title, 'amount' => $parties['platform'][$k]['amount'] ?? 0, 'n' => $parties['platform'][$k]['n'] ?? 0];
+        }
+        $sum = static fn(string $p) => array_sum(array_column($parties[$p] ?? [], 'amount'));
+        // 示例订单：取销量最高的团购 + 外卖各一个，演示一笔钱怎么拆
+        $samples = [];
+        foreach (['groupbuy', 'takeout'] as $type) {
+            $d = Db::one("SELECT d.*, m.name AS merchant_name, m.manager_id FROM deals d JOIN merchants m ON m.id = d.merchant_id
+                WHERE d.type = ? AND d.status = 'on' AND m.status = 'approved'" . ($sid ? " AND m.school_id = $sid" : '') . ' ORDER BY d.sold DESC LIMIT 1', [$type]);
+            if ($d) {
+                [$commission, $margin] = PricingService::split($d['sale_price'] - $d['merchant_settle'], !empty($d['manager_id']));
+                $samples[] = [
+                    'type' => $type, 'title' => $d['title'], 'merchant_name' => $d['merchant_name'], 'pricing_mode' => $d['pricing_mode'],
+                    'competitor_price' => (int) $d['competitor_price'], 'sale_price' => (int) $d['sale_price'],
+                    'merchant_settle' => (int) $d['merchant_settle'], 'manager_commission' => $commission, 'platform_margin' => $margin,
+                    'delivery_fee' => $type === 'takeout' ? (int) Settings::get('delivery_fee') : 0,
+                    'rider_commission' => $type === 'takeout' ? (int) Settings::get('rider_commission') : 0,
+                ];
+            }
+        }
+        return [
+            'platform'     => $platform,
+            'platform_net' => array_sum(array_column($platform, 'amount')),
+            'parties'      => [
+                ['party' => 'merchant', 'title' => '商家结算', 'amount' => $sum('merchant')],
+                ['party' => 'manager',  'title' => '客户经理佣金', 'amount' => $sum('manager')],
+                ['party' => 'rider',    'title' => '骑手配送提成', 'amount' => $sum('rider')],
+                ['party' => 'student',  'title' => '学生收入（跑腿赏金 / 二手货款）', 'amount' => $sum('student')],
+                ['party' => 'platform', 'title' => '平台净收入', 'amount' => $sum('platform')],
+            ],
+            'rules'   => Settings::all(),
+            'samples' => $samples,
+            'ad_slots_active' => (int) Db::value("SELECT COUNT(*) FROM promotions WHERE status = 'active' AND start_date <= date('now','localtime') AND end_date >= date('now','localtime')" . ($sid ? " AND school_id = $sid" : '')),
+            'coupon_stats' => Db::one("SELECT COUNT(*) AS claimed, SUM(status = 'used') AS used FROM user_coupons"),
+        ];
+    }
+
+    /* ---------- 首页推荐位 ---------- */
+    public function promotions(Request $req): array
+    {
+        [$where, $params] = $this->filters($req, ['status' => 'p.status', 'school_id' => 'p.school_id', 'category' => 'p.category'], 'm.name');
+        $sid = $req->int('school_id') ?: (int) Db::value("SELECT id FROM schools WHERE is_pilot = 1 ORDER BY id LIMIT 1");
+        $board = [];
+        foreach (PromotionService::CATEGORIES as $c => $name) {
+            $board[] = ['category' => $c, 'name' => $name, 'slots' => PromotionService::slots($sid, $c)];
+        }
+        return [
+            'rows' => Db::all(
+                "SELECT p.*, m.name AS merchant_name, d.title AS deal_title, s.name AS school_name FROM promotions p
+                 JOIN merchants m ON m.id = p.merchant_id JOIN deals d ON d.id = p.deal_id JOIN schools s ON s.id = p.school_id
+                 $where ORDER BY p.status = 'pending' DESC, p.id DESC LIMIT 200",
+                $params
+            ),
+            'board' => $board,
+            'board_school_id' => $sid,
+            'prices' => Settings::get('ad_prices'),
+            'categories' => PromotionService::CATEGORIES,
+        ];
+    }
+
+    /** 后台直接排期（线下由客户经理谈下的广告） */
+    public function createPromotion(Request $req): array
+    {
+        $deal = $this->mustFind('deals', $req->int('deal_id'), '商品');
+        $m = $this->mustFind('merchants', (int) $deal['merchant_id'], '商家');
+        return PromotionService::create($m, (int) $deal['id'], $req->int('position'), $req->int('days', 7), $req->str('start_date', 10) ?: date('Y-m-d'), 'admin');
+    }
+
+    public function promotionAction(Request $req): array
+    {
+        $id = (int) $req->params['id'];
+        return match ($req->params['action']) {
+            'approve' => PromotionService::approve($id),
+            'reject'  => PromotionService::reject($id),
+            'end'     => PromotionService::end($id),
+            default   => throw new HttpException('未知操作', 404),
+        };
+    }
+
+    /* ---------- 平台优惠券（福利群发券） ---------- */
+    public function coupons(Request $req): array
+    {
+        $today = date('Y-m-d');
+        return Db::all(
+            "SELECT t.*, s.name AS school_name,
+                (SELECT COUNT(*) FROM user_coupons c WHERE c.template_id = t.id AND c.claim_date = ?) AS claimed_today,
+                (SELECT COUNT(*) FROM user_coupons c WHERE c.template_id = t.id) AS claimed_total,
+                (SELECT COUNT(*) FROM user_coupons c WHERE c.template_id = t.id AND c.status = 'used') AS used_total,
+                (SELECT COALESCE(SUM(o.coupon_discount),0) FROM user_coupons c JOIN orders o ON o.id = c.order_id
+                   WHERE c.template_id = t.id AND o.status IN ('paid','ready','delivering','completed')) AS subsidy_total
+             FROM coupon_templates t LEFT JOIN schools s ON s.id = t.school_id ORDER BY t.status = 'on' DESC, t.id DESC",
+            [$today]
+        );
+    }
+
+    public function saveCoupon(Request $req): array
+    {
+        $id = (int) ($req->params['id'] ?? 0);
+        if ($id && $req->input('title') === null) {
+            // 仅切换上下线
+            $t = $this->mustFind('coupon_templates', $id, '优惠券');
+            Db::update('coupon_templates', ['status' => $t['status'] === 'on' ? 'off' : 'on'], 'id = :id', ['id' => $id]);
+            return Db::one('SELECT * FROM coupon_templates WHERE id = ?', [$id]);
+        }
+        $amount = (int) $req->money('amount', true, '抵扣金额');
+        $threshold = (int) ($req->money('threshold') ?? 0);
+        if ($amount <= 0 || $amount > 5000) {
+            throw new HttpException('抵扣金额需在 0.01~50 元之间', 422);
+        }
+        if ($threshold && $threshold <= $amount) {
+            throw new HttpException('使用门槛应大于抵扣金额', 422);
+        }
+        $quota = $req->int('daily_quota');
+        if ($quota < 1 || $quota > 10000) {
+            throw new HttpException('每日发放数量需在 1~10000 之间', 422);
+        }
+        $start = $req->str('start_time', 5) ?: '00:00';
+        if (!preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', $start)) {
+            throw new HttpException('开抢时间格式应为 HH:MM', 422);
+        }
+        $data = [
+            'school_id'   => $req->int('school_id') ?: null,
+            'title'       => $req->str('title', 20, true, '券名称'),
+            'amount'      => $amount,
+            'threshold'   => $threshold,
+            'scope'       => $req->oneOf('scope', array_keys(CouponService::SCOPES), 'all'),
+            'daily_quota' => $quota,
+            'start_time'  => $start,
+            'valid_days'  => max(1, min(30, $req->int('valid_days', 1))),
+        ];
+        if ($id) {
+            $this->mustFind('coupon_templates', $id, '优惠券');
+            Db::update('coupon_templates', $data, 'id = :id', ['id' => $id]);
+        } else {
+            $id = Db::insert('coupon_templates', $data);
+        }
+        return Db::one('SELECT * FROM coupon_templates WHERE id = ?', [$id]);
     }
 
     /* ---------- 树洞审核 ---------- */

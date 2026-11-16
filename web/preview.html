@@ -4,11 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>校园生活 · 原型预览</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22%3E%3Crect width=%2264%22 height=%2264%22 rx=%2216%22 fill=%22%23ff6a2b%22/%3E%3Ctext x=%2232%22 y=%2244%22 font-size=%2234%22 text-anchor=%22middle%22 fill=%22white%22 font-weight=%22700%22%3E%E6%A0%A1%3C/text%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22%3E%3Crect width=%2264%22 height=%2264%22 rx=%2216%22 fill=%22%23ff6a1a%22/%3E%3Ctext x=%2232%22 y=%2244%22 font-size=%2234%22 text-anchor=%22middle%22 fill=%22white%22 font-weight=%22700%22%3E%E6%A0%A1%3C/text%3E%3C/svg%3E">
 <style>
   :root {
     --bg: #eef0f4; --panel: #ffffff; --ink: #1d1f23; --ink-2: #5b6170; --ink-3: #9aa0ad; --line: #e3e6ec;
-    --student: #ff6a2b; --merchant: #2f6bff; --manager: #7048e8; --rider: #0ea5a4;
+    --student: #ff6a1a; --merchant: #2f6bff; --manager: #6e4ae6; --rider: #0b9f9a;
     font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif; color: var(--ink);
   }
   * { box-sizing: border-box; }
@@ -17,18 +17,20 @@
 
   .panel { width: 320px; flex: none; display: flex; flex-direction: column; gap: 14px; max-height: calc(100vh - 48px); overflow-y: auto; }
   .brand { display: flex; align-items: center; gap: 12px; }
-  .brand .logo { width: 44px; height: 44px; border-radius: 12px; background: var(--student); color: #fff; font-weight: 800; font-size: 20px; display: flex; align-items: center; justify-content: center; }
+  .brand .logo { width: 44px; height: 44px; border-radius: 13px; background: linear-gradient(135deg, #ff8a3c, #ff5f1f); color: #fff; display: flex; align-items: center; justify-content: center; box-shadow: 0 6px 16px rgba(255,106,26,.28); }
+  svg.i { flex: none; display: block; }
+  .new { display: inline-block; margin-left: 4px; padding: 0 5px; border-radius: 4px; background: #fff1ef; color: #e5372b; font-size: 10px; line-height: 16px; font-weight: 600; vertical-align: 1px; }
   .brand h1 { margin: 0; font-size: 20px; }
   .brand p { margin: 0; font-size: 12px; color: var(--ink-3); }
   .box { background: var(--panel); border-radius: 14px; padding: 14px; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
   .box h2 { margin: 0 0 10px; font-size: 13px; color: var(--ink-2); font-weight: 600; }
   .roles { display: grid; gap: 8px; }
   .role { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; border: 2px solid var(--line); background: #fff; cursor: pointer; text-align: left; font: inherit; color: inherit; }
-  .role .dot { width: 30px; height: 30px; border-radius: 9px; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; flex: none; }
+  .role .dot { width: 32px; height: 32px; border-radius: 10px; color: #fff; display: flex; align-items: center; justify-content: center; flex: none; }
   .role b { display: block; font-size: 14px; }
   .role small { color: var(--ink-3); font-size: 12px; }
   .role.on { border-color: var(--c); background: color-mix(in srgb, var(--c) 6%, #fff); }
-  .admin-link { display: block; margin-top: 10px; padding: 10px 12px; border-radius: 10px; background: #17191f; color: #fff; text-decoration: none; font-size: 13px; font-weight: 600; }
+  .admin-link { display: flex; align-items: center; gap: 8px; margin-top: 10px; padding: 10px 12px; border-radius: 10px; background: #17191f; color: #fff; text-decoration: none; font-size: 13px; font-weight: 600; }
   .admin-link:hover { background: #2b2d33; }
   .links { display: flex; flex-wrap: wrap; gap: 6px; }
   .links button { height: 28px; padding: 0 10px; border-radius: 14px; border: 1px solid var(--line); background: #fff; font: inherit; font-size: 12px; color: var(--ink-2); cursor: pointer; }
@@ -65,17 +67,17 @@
 </head>
 <body>
   <aside class="panel">
-    <div class="brand"><div class="logo">校</div><div><h1>校园生活 · 原型预览</h1><p>v0.2 · 试点：青岛理工职业学院 · 演示数据均为虚构</p></div></div>
+    <div class="brand"><div class="logo" data-icon="school"></div><div><h1>校园生活 · 原型预览</h1><p>v0.3 · 试点：青岛理工职业学院 · 演示数据均为虚构</p></div></div>
 
     <div class="box">
       <h2>切换身份</h2>
       <div class="roles">
-        <button class="role" data-role="student" style="--c:var(--student)"><span class="dot" style="background:var(--student)">学</span><span><b>学生端</b><small>跑腿 · 快递 · 二手 · 树洞 · 周边下单</small></span></button>
-        <button class="role" data-role="merchant" style="--c:var(--merchant)"><span class="dot" style="background:var(--merchant)">商</span><span><b>商家端</b><small>老王黄焖鸡 · 上架 · 核销 · 外卖备餐</small></span></button>
-        <button class="role" data-role="manager" style="--c:var(--manager)"><span class="dot" style="background:var(--manager)">经</span><span><b>客户经理端</b><small>邀请码 QD8801 · 审核商家 · 佣金</small></span></button>
-        <button class="role" data-role="rider" style="--c:var(--rider)"><span class="dot" style="background:var(--rider)">骑</span><span><b>骑手端</b><small>外卖团队 · 批次取餐 · 集中送达</small></span></button>
+        <button class="role" data-role="student" style="--c:var(--student)"><span class="dot" style="background:linear-gradient(135deg,#ffa05c,#ff5f1f)" data-icon="user"></span><span><b>学生端</b><small>领券 · 跑腿 · 二手担保 · 树洞 · 周边下单</small></span></button>
+        <button class="role" data-role="merchant" style="--c:var(--merchant)"><span class="dot" style="background:linear-gradient(135deg,#4f86ff,#2357f0)" data-icon="store"></span><span><b>商家端</b><small>老王黄焖鸡 · 核销 · 外卖备餐 · 买推荐位</small></span></button>
+        <button class="role" data-role="manager" style="--c:var(--manager)"><span class="dot" style="background:linear-gradient(135deg,#8a68ff,#5d3bd9)" data-icon="handshake"></span><span><b>客户经理端</b><small>邀请码 QD8801 · 审核商家 · 佣金</small></span></button>
+        <button class="role" data-role="rider" style="--c:var(--rider)"><span class="dot" style="background:linear-gradient(135deg,#22c0b2,#0a8f8a)" data-icon="takeout"></span><span><b>骑手端</b><small>外卖团队 · 批次取餐 · 集中送达</small></span></button>
       </div>
-      <a class="admin-link" href="/admin/" target="_blank">🖥️ 打开平台管理后台（电脑端）→</a>
+      <a class="admin-link" href="/admin/" target="_blank"><span data-icon="monitor"></span>打开平台管理后台（电脑端）<span style="margin-left:auto" data-icon="arrow-right"></span></a>
     </div>
 
     <div class="box">
@@ -86,12 +88,12 @@
     <div class="box">
       <h2>推荐演示路线</h2>
       <div class="meta">
-        1. 学生端 → 周边 → 老王黄焖鸡 → 购买团购（看"比美团省"）→ 模拟支付拿券码<br>
-        2. 商家端 → 核销 → 点击演示券码核销<br>
-        3. 客户经理端 → 概览佣金增加 → 审核「小李烧烤」<br>
-        4. 学生端 → 校园外卖下单选时间点 → 商家端「订单」点已出餐<br>
-        5. 骑手端 → 进入批次 → 到店取餐 → 按取餐点全部送达（收入 +1 元/单）<br>
-        6. 管理后台 → 看板 / 商家终审 / 商品比价抽查 / 资金流水 / 树洞审核
+        1. 学生端首页 → 今日福利抢券 → 热门推荐（行业推荐位置顶，标"广告"）<br>
+        2. 校园外卖下单 → 自动用券抵扣 → 模拟支付 → 订单详情（小号退款按钮）<span class="new">新</span><br>
+        3. 商家端 → 订单「已出餐」；工作台 → 首页推荐位购买 <span class="new">新</span><br>
+        4. 骑手端 → 批次取餐 → 取餐点<b>拍照送达</b> → 学生订单可见照片 <span class="new">新</span><br>
+        5. 学生端 → 代取快递「顺丰小件」→ 拍照确认送达；二手 → 我的交易 → 确认收货 <span class="new">新</span><br>
+        6. 管理后台 → <b>收益分配</b>（平台怎么抽成、利润去哪）/ 推荐位审核 / 优惠券 / 平台参数 <span class="new">新</span>
       </div>
     </div>
 
@@ -117,15 +119,21 @@
     <div class="caption">9:16 手机模拟 · 页面结构与微信小程序一一对应</div>
   </div>
 
+<script src="/shared/icons.js"></script>
 <script>
   const frame = document.getElementById('frame');
   const LINKS = {
-    student: [['首页', '/'], ['周边生活', '/local'], ['校园外卖', '/local?cat=takeout'], ['跑腿', '/errands?type=errand'], ['代取快递', '/errands?type=express'], ['二手', '/market'], ['树洞', '/treehole'], ['问一问 AI', '/ai'], ['我的订单', '/orders'], ['商家入驻', '/merchant-apply'], ['切换学校', '/school'], ['登录页', '/login']],
-    merchant: [['工作台', '/m'], ['商品管理', '/m/deals'], ['上架商品', '/m/deal/new'], ['券码核销', '/m/verify'], ['外卖订单', '/m/orders?type=takeout'], ['店铺设置', '/m/shop']],
+    student: [['首页', '/'], ['领券中心', '/coupons'], ['周边生活', '/local'], ['校园外卖', '/local?cat=takeout'], ['跑腿', '/errands?type=errand'], ['代取快递', '/errands?type=express'], ['二手', '/market'], ['二手交易', '/market/orders'], ['树洞', '/treehole'], ['学校百事通', '/ai'], ['我的订单', '/orders'], ['我的钱包', '/wallet'], ['商家入驻', '/merchant-apply'], ['切换学校', '/school'], ['登录页', '/login']],
+    merchant: [['工作台', '/m'], ['商品管理', '/m/deals'], ['上架商品', '/m/deal/new'], ['券码核销', '/m/verify'], ['外卖订单', '/m/orders?type=takeout'], ['首页推荐位', '/m/promote'], ['店铺设置', '/m/shop']],
     manager: [['概览', '/g'], ['我的商家', '/g/merchants'], ['定价试算', '/g/calc'], ['佣金明细', '/g/commissions']],
     rider: [['配送任务', '/r'], ['我的收入', '/r/earnings'], ['切到学生端', '/']],
   };
-  const STATUS_BG = { student: '#ff6a2b', merchant: '#fff', manager: '#fff' };
+  const STATUS_BG = { student: '#ff6a1a', merchant: '#2f6bff', manager: '#6e4ae6', rider: '#0b9f9a' };
+  // 线性图标（与小程序端共用）
+  document.querySelectorAll('[data-icon]').forEach((el) => {
+    const size = el.classList.contains('logo') ? 24 : el.classList.contains('dot') ? 18 : 16;
+    el.innerHTML = `<svg class="i" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICONS[el.dataset.icon] || ''}</svg>`;
+  });
   let role = 'student';
   try { role = localStorage.getItem('preview-role') || 'student'; } catch (e) {}
 
@@ -156,8 +164,8 @@
     if (e.data?.type !== 'campus-route') return;
     document.getElementById('route').textContent = '#' + e.data.path + (e.data.role ? `  （${e.data.role}）` : '');
     const status = document.querySelector('.status');
-    const brandTop = e.data.role === 'student' && (e.data.path === '/' || e.data.path === '');
-    status.style.setProperty('--status-bg', brandTop ? STATUS_BG.student : '#fff');
+    const brandTop = (e.data.role === 'student' && ['/', ''].includes(e.data.path)) || e.data.path === '/me';
+    status.style.setProperty('--status-bg', brandTop ? STATUS_BG[e.data.role] || STATUS_BG.student : '#fff');
     status.style.setProperty('--status-ink', brandTop ? '#fff' : '#111');
   });
   const tick = () => { const d = new Date(); document.getElementById('clock').textContent = d.getHours() + ':' + String(d.getMinutes()).padStart(2, '0'); };

@@ -16,7 +16,9 @@
 | GET | /api/schools | 公开 | `?keyword=` 已开通 + 筹备中学校 |
 | POST | /api/schools/apply | 公开 | `{name, city, contact}` 申请开通学校 |
 | GET | /api/schools/{id}/config | 公开 | 送餐时间点、取餐点 |
-| GET | /api/home | 登录 | 首页聚合：banner、统计、热门团购、热门树洞 |
+| GET | /api/home | 登录 | 首页聚合：banner、今日福利券、推荐商品（推荐位置顶 + 销量）、热门树洞 |
+| GET | /api/config | 公开 | 前端配置：比价文案、抽成费率、配送费、推荐位价格、福利群 |
+| GET | /api/wallet | 登录 | 学生钱包：跑腿赏金、二手货款、配送提成 |
 
 ## 板块一：校园基础业务
 
@@ -26,12 +28,15 @@
 | GET | /api/errands/mine | 我发布的 + 我接的 |
 | POST | /api/errands | `{type, title, description, pickup_addr, deliver_addr, reward, express_station, express_code, size}` |
 | GET | /api/errands/{id} | 详情（取件码仅双方可见） |
-| POST | /api/errands/{id}/{action} | action = accept / deliver / complete / cancel |
+| POST | /api/errands/{id}/{action} | action = accept / deliver（须 `proof_image` 送达照片）/ complete（打款并抽服务费）/ cancel |
 | GET | /api/market | `?category=&keyword=&page=` |
 | GET | /api/market/mine | |
 | POST | /api/market | `{title, description, category, item_condition, price, original_price, contact}` |
 | GET | /api/market/{id} | 详情（浏览量 +1） |
 | POST | /api/market/{id}/status | `{status: on_sale/reserved/sold/off}` |
+| POST | /api/market/{id}/buy | 担保交易下单（模拟支付托管，宝贝锁定） |
+| GET | /api/market-orders | `?role=buy/sell` 我买到的 / 我卖出的 |
+| POST | /api/market-orders/{id}/{action} | confirm（买家确认收货，打款给卖家扣服务费）/ cancel（交易前取消退款） |
 | GET | /api/treehole | `?tag=` 含 liked 标记 |
 | POST | /api/treehole | `{content, tag}` |
 | POST | /api/treehole/{id}/like | 点赞/取消 |
@@ -44,10 +49,15 @@
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | /api/local/merchants | `?category=food/netcafe/billiards/homestay/ktv/takeout&keyword=` 含最低价、最高省多少 |
+| GET | /api/local/merchants | `?category=food/netcafe/billiards/homestay/ktv/takeout&keyword=` 含最低价、最高省多少、`is_ad`（推荐位在前） |
+| GET | /api/local/recommend | `?category=&limit=` 推荐商品：行业推荐位置顶（`is_ad`），其余按销量 |
+| GET | /api/coupons/today | 今日可抢的券（剩余、是否已领、开抢时间）+ 福利群信息 |
+| POST | /api/coupons/{id}/claim | 抢券（每人每券每天 1 张，每日限量） |
+| GET | /api/coupons/mine | `?status=available/used/expired` |
+| GET | /api/coupons/usable | `?deal_id=&quantity=` 下单可用券 |
 | GET | /api/local/merchants/{id} | 商家 + 在售商品（不含结算价） |
 | GET | /api/local/deals/{id} | 商品详情；外卖含送餐时间点/取餐点/配送费 |
-| POST | /api/orders | `{deal_id, quantity, delivery_slot, delivery_point, contact_phone, remark}` |
+| POST | /api/orders | `{deal_id, quantity, delivery_slot, delivery_point, contact_phone, remark, coupon_id}` |
 | GET | /api/orders | 我的订单 + `total_saved` 累计已省 |
 | GET | /api/orders/{id} | 详情含券码 |
 | POST | /api/orders/{id}/pay | 模拟支付（团购生成券码） |
@@ -68,6 +78,8 @@
 | GET | /api/merchant/orders | `?type=&status=` |
 | POST | /api/merchant/verify | `{code}` 核销券码 |
 | POST | /api/merchant/orders/{id}/advance | 外卖出餐：paid → ready |
+| GET | /api/merchant/promotions | 我的推广 + 本店行业推荐位占用情况 + 可推广商品 |
+| POST | /api/merchant/promotions | `{deal_id, position, days, start_date}` 购买推荐位（模拟支付，待审核） |
 
 ## 客户经理端（角色 manager）
 
@@ -86,7 +98,7 @@
 | GET | /api/rider/dashboard | 今日/累计收入、配送中、批次列表（每批：备餐中/待取餐/我配送中/已送达） |
 | GET | /api/rider/batch | `?date=&slot=` 取餐清单（按商家）+ 我的送达清单（按取餐点） |
 | POST | /api/rider/pickup | `{order_ids: []}` 批量取餐（ready → delivering） |
-| POST | /api/rider/deliver | `{order_ids: []}` 批量送达（→ completed，写分账） |
+| POST | /api/rider/deliver | `{order_ids: [], proof_image}` 批量送达（须拍照，→ completed，写分账） |
 | GET | /api/rider/earnings | 提成流水 |
 
 ## 平台管理后台（角色 admin）
@@ -103,13 +115,17 @@
 | GET | /api/admin/ledger | 流水汇总 + 明细 `?party_type=` |
 | GET | /api/admin/users | `?role=&rider_status=&status=&keyword=` |
 | POST | /api/admin/users/{id} | `{role}` 设为客户经理（自动邀请码）/ `{rider_status}` / `{status: banned}` |
-| GET / POST | /api/admin/settings | 分成比例、最少便宜、配送费、骑手提成、截单、免审 |
+| GET / POST | /api/admin/settings | 分成比例、最少便宜、配送费、骑手提成、截单、免审、跑腿 / 二手费率、推荐位价格、比价文案、福利群 |
 | GET / POST | /api/admin/faqs, /api/admin/faqs/{id}, /api/admin/faqs/{id}/delete | 知识库 |
 | GET | /api/admin/ai-logs | `?source=none` 未答上的提问 |
 | GET | /api/admin/treehole | `?reported=1&status=` 含真实身份与举报原因 |
 | POST | /api/admin/treehole/{id}/{action} | hide / restore（驳回举报） |
+| GET | /api/admin/revenue | 收益分配：平台 6 项收入来源、各方累计分配、示例订单拆分、规则参数 |
+| GET / POST | /api/admin/promotions | 推荐位列表 + 排期看板 / 后台直接排期 `{deal_id, position, days, start_date}` |
+| POST | /api/admin/promotions/{id}/{action} | approve（广告费入账）/ reject（退款）/ end（提前下线） |
+| GET / POST | /api/admin/coupons, /api/admin/coupons/{id} | 优惠券模板列表（领取 / 使用 / 补贴统计）/ 新建编辑；只传 id 不传字段为上下线切换 |
 
-## AI 问答（预留）
+## 学校百事通（AI 问答预留）
 
 | 方法 | 路径 | 说明 |
 |---|---|---|

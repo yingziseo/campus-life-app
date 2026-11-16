@@ -2,7 +2,7 @@
 declare(strict_types=1);
 
 use App\Core\Db;
-use App\Services\{OrderService, PricingService, Settings};
+use App\Services\{CouponService, Ledger, OrderService, PricingService, PromotionService, Settings};
 
 /**
  * 建表 + 演示数据。所有演示数据均为虚构，仅用于原型展示。
@@ -33,8 +33,11 @@ final class Seeder
             self::campus($sid, $u);
             $m = self::merchants($sid, $u);
             self::faqs($sid);
+            self::coupons($sid);
             self::history($u, $m);
             self::orders($sid, $u, $m);
+            self::promotions($m);
+            self::trades($sid, $u);
         });
     }
 
@@ -101,6 +104,7 @@ final class Seeder
                 'school_id' => $sid, 'user_id' => $uid, 'type' => $type, 'title' => $title, 'description' => $desc,
                 'pickup_addr' => $station ?? ($type === 'errand' ? (str_starts_with($title, '二') ? '二食堂' : '校门口打印店') : null),
                 'deliver_addr' => $to, 'express_station' => $station, 'express_code' => $code, 'size' => $size, 'reward' => $reward,
+                'fee' => Ledger::fee($reward, 'errand_fee_rate'), 'paid_at' => now(),
             ]);
         }
 
@@ -122,7 +126,7 @@ final class Seeder
         $posts = [
             [$u['s2'], '熬夜的水豚', '图书馆三楼靠窗那个位置的同学，你每天带的柠檬茶是哪家的？想要同款', '日常', 23],
             [$u['s3'], '迷路的企鹅', '新生求问：校园卡丢了去哪里补办？', '求助', 8],
-            [$u['student'], '干饭的柴犬', '东门新开的黄焖鸡在平台上买比外卖软件便宜好几块，亲测', '日常', 41],
+            [$u['student'], '干饭的柴犬', '东门新开的黄焖鸡在平台上买便宜好几块，还能进群领券，亲测', '日常', 41],
             [$u['s2'], '安静的松鼠', '捡到一把蓝色雨伞，放在一食堂门口失物招领处了', '失物招领', 5],
             [$u['s3'], '温柔的橘猫', '体育课八百米，求一个不累的跑法……', '吐槽', 17],
         ];
@@ -136,7 +140,7 @@ final class Seeder
                 Db::run('UPDATE treehole_posts SET report_count = 2 WHERE id = ?', [$pid]);
             }
             if ($tag === '求助') {
-                Db::insert('treehole_comments', ['post_id' => $pid, 'user_id' => $u['s2'], 'anon_name' => '勇敢的海鸥', 'content' => '可以先在平台「问一问」里搜一下，有写流程']);
+                Db::insert('treehole_comments', ['post_id' => $pid, 'user_id' => $u['s2'], 'anon_name' => '勇敢的海鸥', 'content' => '可以先在平台「学校百事通」里搜一下，有写流程']);
                 Db::run('UPDATE treehole_posts SET comment_count = 1 WHERE id = ?', [$pid]);
             }
         }
@@ -199,7 +203,9 @@ final class Seeder
     {
         $common = [
             ['代取快递怎么用？', '首页点「代取快递」→ 发布，填写驿站、取件码和送达地点，设置赏金。取件码只有接单的同学能看到。', '快递,代取,取件'],
-            ['平台上的团购为什么比美团便宜？', '平台由校园团队直接对接商家，不收高额平台抽佣，省下的钱直接让给同学。每个商品都标注了"比美团省 X 元"。', '便宜,美团,优惠,省钱'],
+            ['平台上的东西为什么更便宜？', '平台由校园团队直接对接商家，不收高额平台抽佣，省下的钱直接让给同学。每个商品都标注了"比其他平台省 X 元"，还可以进福利群每天领券。', '便宜,美团,外卖平台,优惠,省钱,低价'],
+            ['怎么领优惠券？', '首页点「领券中心」，每天定时开抢；也可以加入福利群，群里每天发券提醒。领到的券下单时自动抵扣。', '优惠券,领券,福利群,进群,券'],
+            ['二手交易安全吗？', '二手采用担保交易：你付款后由平台托管，当面验货满意再点「确认收货」，钱才会打给卖家；不满意可以取消，全额退款。', '二手,担保,安全,被骗,验货'],
             ['团购券怎么使用？', '下单支付后在「我的订单」里查看 12 位券码，到店出示给商家核销即可。', '券码,核销,团购,使用'],
             ['买了没用可以退款吗？', '未核销的团购券可以在订单详情里随时申请退款，原路退回。', '退款,退钱,取消'],
             ['校园外卖什么时候送？', '校园外卖按固定时间点集中配送（例如 11:30、17:30、21:00），送到指定取餐点，配送费比外卖平台低。截单时间为送餐前 40 分钟。', '外卖,配送,送餐,几点'],
@@ -218,6 +224,97 @@ final class Seeder
         ];
         foreach ($school as [$q, $a, $k]) {
             Db::insert('faqs', ['school_id' => $sid, 'question' => $q, 'answer' => $a, 'keywords' => $k]);
+        }
+    }
+
+    /** 平台优惠券：福利群每日发券 */
+    private static function coupons(int $sid): void
+    {
+        $list = [
+            ['外卖立减券', 200, 1000, 'takeout', 200, '00:00', 1],
+            ['到店团购券', 300, 2000, 'groupbuy', 100, '00:00', 3],
+            ['午间秒杀 无门槛', 300, 0, 'all', 30, '12:00', 1],
+            ['新人专享券', 500, 1500, 'all', 50, '00:00', 7],
+        ];
+        foreach ($list as [$title, $amount, $threshold, $scope, $quota, $start, $days]) {
+            Db::insert('coupon_templates', [
+                'school_id' => $sid, 'title' => $title, 'amount' => $amount, 'threshold' => $threshold, 'scope' => $scope,
+                'daily_quota' => $quota, 'start_time' => $start, 'valid_days' => $days,
+            ]);
+        }
+    }
+
+    /** 首页推荐位：几家商家购买了行业前 3 位（其中一条待审核） */
+    private static function promotions(array $m): void
+    {
+        $deal = static fn(string $k, int $i) => (int) $m[$k]['deals'][$i];
+        $merchant = static fn(string $k) => Db::one('SELECT * FROM merchants WHERE id = ?', [$m[$k]['id']]);
+        $past = date('Y-m-d', strtotime('-3 day'));
+        $book = static function (string $k, int $dealIdx, int $pos, int $days) use ($deal, $merchant, $past) {
+            $p = PromotionService::create($merchant($k), $deal($k, $dealIdx), $pos, $days, date('Y-m-d'), 'admin');
+            // 回拨到 3 天前开始投放
+            Db::run("UPDATE promotions SET start_date = ?, end_date = date(?, '+' || (days - 1) || ' day'), created_at = ? WHERE id = ?", [$past, $past, $past . ' 10:00:00', $p['id']]);
+            Db::run("UPDATE ledger SET created_at = ? WHERE source = 'promotion' AND ref_id = ?", [$past . ' 10:00:00', $p['id']]);
+        };
+        $book('tea', 0, 1, 10);   // 美食第 1 位：奶茶（销量不高，但买了推荐位）
+        $book('mlt', 1, 1, 10);   // 校园外卖第 1 位
+        $book('net', 0, 1, 10);   // 网吧第 1 位
+        // 王老板（演示商家）申请美食第 2 位，等待平台审核
+        PromotionService::create($merchant('hmj'), $deal('hmj', 0), 2, 7, date('Y-m-d', strtotime('+1 day')));
+    }
+
+    /** 跑腿与二手担保交易的成交记录（产生服务费流水），以及待演示的进行中订单 */
+    private static function trades(int $sid, array $u): void
+    {
+        $users = [];
+        foreach ($u as $k => $id) {
+            $users[$k] = $id;
+        }
+        // 已完成的跑腿：小刘帮阿杰带饭，平台抽 5%
+        $ago = date('Y-m-d H:i:s', strtotime('-1 day 12:10'));
+        $eid = Db::insert('errands', [
+            'school_id' => $sid, 'user_id' => $u['s2'], 'type' => 'errand', 'title' => '一食堂带份煲仔饭', 'pickup_addr' => '一食堂二楼',
+            'deliver_addr' => '北区3号楼 415', 'reward' => 600, 'fee' => Ledger::fee(600, 'errand_fee_rate'), 'status' => 'completed',
+            'runner_id' => $u['rider'], 'paid_at' => $ago, 'accepted_at' => $ago, 'delivered_at' => $ago, 'completed_at' => $ago, 'created_at' => $ago,
+        ]);
+        $e = Db::one('SELECT * FROM errands WHERE id = ?', [$eid]);
+        Ledger::add('errand', $sid, 'student', (int) $u['rider'], $e['reward'] - $e['fee'], 'errand_reward', '跑腿 · ' . $e['title'], null, $eid);
+        Ledger::add('errand', $sid, 'platform', null, (int) $e['fee'], 'errand_fee', '跑腿 · ' . $e['title'], null, $eid);
+        Db::run("UPDATE ledger SET created_at = ? WHERE source = 'errand' AND ref_id = ?", [$ago, $eid]);
+
+        // 演示学生已接单、待送达拍照的代取快递
+        Db::insert('errands', [
+            'school_id' => $sid, 'user_id' => $u['s3'], 'type' => 'express', 'title' => '顺丰小件送南区2号楼', 'pickup_addr' => '顺丰服务点',
+            'express_station' => '顺丰服务点', 'express_code' => 'SF 5-1-2207', 'size' => 'small', 'deliver_addr' => '南区2号楼 218',
+            'reward' => 300, 'fee' => Ledger::fee(300, 'errand_fee_rate'), 'status' => 'accepted', 'runner_id' => $u['student'],
+            'paid_at' => now(), 'accepted_at' => now(),
+        ]);
+
+        // 二手：一笔已确认收货（平台抽 2%），一笔演示学生作为买家待确认收货
+        $item = static fn(int $uid, string $title, string $cat, int $price, int $orig, string $status) => Db::insert('market_items', [
+            'school_id' => $sid, 'user_id' => $uid, 'title' => $title, 'category' => $cat, 'description' => '当面验货，担保交易',
+            'price' => $price, 'original_price' => $orig, 'item_condition' => '9成新', 'contact' => '微信 demo-' . $uid, 'status' => $status,
+        ]);
+        $sold = $item($u['s3'], '计算机二级考试教材', 'book', 1200, 4500, 'sold');
+        $fee = Ledger::fee(1200, 'market_fee_rate');
+        $oid = Db::insert('market_orders', [
+            'order_no' => 'M' . date('YmdHis', strtotime('-2 day')) . '00001', 'school_id' => $sid, 'item_id' => $sold, 'buyer_id' => $u['s2'],
+            'seller_id' => $u['s3'], 'title' => '计算机二级考试教材', 'price' => 1200, 'fee' => $fee, 'status' => 'completed',
+            'created_at' => date('Y-m-d H:i:s', strtotime('-2 day')), 'completed_at' => date('Y-m-d H:i:s', strtotime('-2 day')),
+        ]);
+        Ledger::add('market', $sid, 'student', (int) $u['s3'], 1200 - $fee, 'market_sale', '二手 · 计算机二级考试教材', null, $oid);
+        Ledger::add('market', $sid, 'platform', null, $fee, 'market_fee', '二手 · 计算机二级考试教材', null, $oid);
+
+        $reserved = $item($u['s2'], '罗技无线鼠标 M330', 'digital', 3500, 9900, 'reserved');
+        Db::insert('market_orders', [
+            'order_no' => 'M' . date('YmdHis') . '00002', 'school_id' => $sid, 'item_id' => $reserved, 'buyer_id' => $u['student'],
+            'seller_id' => $u['s2'], 'title' => '罗技无线鼠标 M330', 'price' => 3500, 'fee' => Ledger::fee(3500, 'market_fee_rate'), 'status' => 'paid',
+        ]);
+
+        // 演示学生已领取一张外卖券、一张新人券
+        $student = Db::one('SELECT * FROM users WHERE id = ?', [$u['student']]);
+        foreach (Db::all("SELECT id FROM coupon_templates WHERE title IN ('外卖立减券','新人专享券')") as $t) {
+            CouponService::claim($student, (int) $t['id']);
         }
     }
 
@@ -273,6 +370,7 @@ final class Seeder
             }
         }
         $merchants = [];
+        $couponDays = [];
         $perDay = [6 => 5, 5 => 8, 4 => 7, 3 => 11, 2 => 9, 1 => 14];
         $seq = 0;
         foreach ($perDay as $daysAgo => $n) {
@@ -280,7 +378,17 @@ final class Seeder
                 $buyer = $buyers[$seq % 3];
                 $deal = $deals[($seq * 7 + $daysAgo) % count($deals)];
                 $merchants[$deal['merchant_id']] ??= Db::one('SELECT * FROM merchants WHERE id = ?', [$deal['merchant_id']]);
-                $order = OrderService::pay($buyer, (int) OrderService::create($buyer, (int) $deal['id'], 1 + ($seq % 4 === 0 ? 1 : 0))['id']);
+                $couponId = 0;
+                if ($seq % 5 === 2 && empty($couponDays[$buyer['id']][$daysAgo])) {
+                    $couponDays[$buyer['id']][$daysAgo] = true;
+                    // 部分历史订单使用了福利群优惠券（平台补贴）
+                    $tpl = Db::one("SELECT * FROM coupon_templates WHERE scope = 'groupbuy'");
+                    $couponId = Db::insert('user_coupons', [
+                        'template_id' => $tpl['id'], 'user_id' => $buyer['id'], 'title' => $tpl['title'], 'amount' => $tpl['amount'], 'threshold' => 0,
+                        'scope' => 'groupbuy', 'claim_date' => date('Y-m-d', strtotime("-$daysAgo day")), 'expires_at' => date('Y-m-d 23:59:59'),
+                    ]);
+                }
+                $order = OrderService::pay($buyer, (int) OrderService::create($buyer, (int) $deal['id'], 1 + ($seq % 4 === 0 ? 1 : 0), [], $couponId)['id']);
                 foreach ($order['coupons'] as $c) {
                     OrderService::verifyCoupon($merchants[$deal['merchant_id']], $c['code']);
                 }

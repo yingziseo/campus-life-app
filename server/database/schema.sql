@@ -58,11 +58,15 @@ CREATE TABLE IF NOT EXISTS errands (
     express_station TEXT,                   -- 快递驿站
     express_code    TEXT,                   -- 取件码（仅发布者与接单人可见）
     size            TEXT,                   -- small | medium | large
-    reward          INTEGER NOT NULL,       -- 赏金(分)
+    reward          INTEGER NOT NULL,       -- 赏金(分)，发布时预付托管
+    fee             INTEGER NOT NULL DEFAULT 0, -- 平台服务费(分) = 赏金 × errand_fee_rate，完成时从赏金中扣除
+    proof_image     TEXT,                   -- 送达凭证照片（接单人送达时拍照上传）
     status          TEXT NOT NULL DEFAULT 'open', -- open 待接单 | accepted 已接单 | delivered 已送达 | completed 已完成 | cancelled 已取消
     runner_id       INTEGER REFERENCES users(id),
     created_at      TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    paid_at         TEXT,                   -- 赏金托管支付时间（原型为模拟支付）
     accepted_at     TEXT,
+    delivered_at    TEXT,
     completed_at    TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_errands_school ON errands(school_id, status, type);
@@ -85,6 +89,23 @@ CREATE TABLE IF NOT EXISTS market_items (
     created_at      TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
 CREATE INDEX IF NOT EXISTS idx_market_school ON market_items(school_id, status, category);
+
+-- 二手担保交易：买家付款给平台托管 → 当面验货交易 → 买家确认收货后打款给卖家（扣服务费）
+CREATE TABLE IF NOT EXISTS market_orders (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_no    TEXT NOT NULL UNIQUE,
+    school_id   INTEGER NOT NULL REFERENCES schools(id),
+    item_id     INTEGER NOT NULL REFERENCES market_items(id),
+    buyer_id    INTEGER NOT NULL REFERENCES users(id),
+    seller_id   INTEGER NOT NULL REFERENCES users(id),
+    title       TEXT NOT NULL,
+    price       INTEGER NOT NULL,          -- 买家实付(分)
+    fee         INTEGER NOT NULL DEFAULT 0, -- 平台服务费(分)
+    status      TEXT NOT NULL DEFAULT 'paid', -- paid 已付款待交易 | completed 已确认收货 | cancelled 已取消退款
+    created_at  TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    completed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_market_orders_user ON market_orders(buyer_id, seller_id);
 
 -- 树洞（匿名展示，后台可追溯真实用户）
 CREATE TABLE IF NOT EXISTS treehole_posts (
@@ -190,19 +211,22 @@ CREATE TABLE IF NOT EXISTS orders (
     unit_price          INTEGER NOT NULL,
     goods_amount        INTEGER NOT NULL,   -- 商品金额 = 单价 × 数量
     delivery_fee        INTEGER NOT NULL DEFAULT 0,
-    total_amount        INTEGER NOT NULL,   -- 用户实付
+    coupon_discount     INTEGER NOT NULL DEFAULT 0, -- 平台优惠券抵扣（平台补贴，从平台收入中扣除）
+    user_coupon_id      INTEGER,
+    total_amount        INTEGER NOT NULL,   -- 用户实付 = 商品 + 配送费 - 优惠券
     competitor_amount   INTEGER NOT NULL,   -- 同等商品在竞品平台的总价（用于"已省"展示）
     merchant_amount     INTEGER NOT NULL,   -- 商家应得
     platform_gross      INTEGER NOT NULL,   -- 商品差价毛利（平台+客户经理）
     manager_commission  INTEGER NOT NULL DEFAULT 0,
     rider_commission    INTEGER NOT NULL DEFAULT 0,
-    platform_net        INTEGER NOT NULL,   -- 平台净收入 = 毛利 - 经理佣金 + 配送费 - 骑手提成
+    platform_net        INTEGER NOT NULL,   -- 平台净收入 = 毛利 - 经理佣金 + 配送费 - 骑手提成 - 优惠券补贴
     delivery_date       TEXT,
     delivery_slot       TEXT,
     delivery_point      TEXT,
     contact_phone       TEXT,
     remark              TEXT,
     rider_id            INTEGER REFERENCES users(id), -- 外卖配送骑手
+    proof_image         TEXT,               -- 送达凭证照片（骑手在取餐点拍照上传）
     status              TEXT NOT NULL DEFAULT 'pending_pay', -- pending_pay | paid | ready(已出餐) | delivering | completed | cancelled | refunded
     created_at          TEXT NOT NULL DEFAULT (datetime('now','localtime')),
     paid_at             TEXT,
@@ -223,18 +247,73 @@ CREATE TABLE IF NOT EXISTS coupons (
     used_at     TEXT
 );
 
--- 资金流水（结算凭据，核销/送达时写入）
+-- 资金流水（结算凭据）：团购核销 / 外卖送达 / 跑腿完成 / 二手确认收货 / 推广位购买 时写入
 CREATE TABLE IF NOT EXISTS ledger (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    order_id    INTEGER NOT NULL REFERENCES orders(id),
-    party_type  TEXT NOT NULL,     -- merchant | manager | platform | rider
-    party_id    INTEGER,           -- merchants.id / users.id；platform、rider 池为 NULL
-    amount      INTEGER NOT NULL,
-    kind        TEXT NOT NULL,     -- settle 商家结算 | commission 推广佣金 | margin 平台差价 | delivery 配送
+    school_id   INTEGER,
+    source      TEXT NOT NULL DEFAULT 'order', -- order 本地生活订单 | errand 跑腿 | market 二手 | promotion 推广位
+    order_id    INTEGER REFERENCES orders(id), -- source=order 时有值
+    ref_id      INTEGER,           -- 对应业务单 id（errands / market_orders / promotions）
+    party_type  TEXT NOT NULL,     -- merchant | manager | platform | rider | student（跑腿接单人 / 二手卖家）
+    party_id    INTEGER,           -- merchants.id / users.id；platform 为 NULL
+    amount      INTEGER NOT NULL,  -- 可为负（平台优惠券补贴）
+    kind        TEXT NOT NULL,     -- settle 商家结算 | commission 推广佣金 | margin 商品差价 | delivery 配送 | subsidy 优惠券补贴
+                                   -- errand_reward 跑腿赏金 | errand_fee 跑腿服务费 | market_sale 二手货款 | market_fee 二手服务费 | ad 推广位
     remark      TEXT,
     created_at  TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
 CREATE INDEX IF NOT EXISTS idx_ledger_party ON ledger(party_type, party_id);
+CREATE INDEX IF NOT EXISTS idx_ledger_order ON ledger(order_id);
+
+-- 首页推荐位（商家购买广告）：每个学校、每个行业前 3 位手动置顶，其余按销量排序
+CREATE TABLE IF NOT EXISTS promotions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    school_id   INTEGER NOT NULL REFERENCES schools(id),
+    merchant_id INTEGER NOT NULL REFERENCES merchants(id),
+    deal_id     INTEGER NOT NULL REFERENCES deals(id),
+    category    TEXT NOT NULL,     -- 行业：food | takeout | netcafe | billiards | homestay | ktv | other
+    position    INTEGER NOT NULL,  -- 1~3
+    start_date  TEXT NOT NULL,
+    end_date    TEXT NOT NULL,
+    days        INTEGER NOT NULL,
+    fee         INTEGER NOT NULL,  -- 广告费(分)
+    status      TEXT NOT NULL DEFAULT 'pending', -- pending 待审核 | active 投放中/已排期 | rejected 已驳回(退款) | ended 已结束
+    source      TEXT NOT NULL DEFAULT 'merchant', -- merchant 商家自助购买 | admin 后台直接排期
+    created_at  TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_promotions_slot ON promotions(school_id, category, status, start_date);
+
+-- 平台优惠券（"进群领福利"：每天定时开抢，平台出资补贴）
+CREATE TABLE IF NOT EXISTS coupon_templates (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    school_id     INTEGER REFERENCES schools(id), -- NULL = 全平台
+    title         TEXT NOT NULL,
+    amount        INTEGER NOT NULL,   -- 抵扣金额(分)
+    threshold     INTEGER NOT NULL DEFAULT 0, -- 使用门槛：商品金额满多少(分)
+    scope         TEXT NOT NULL DEFAULT 'all', -- all 通用 | takeout 外卖 | groupbuy 到店团购
+    daily_quota   INTEGER NOT NULL,   -- 每日发放张数
+    start_time    TEXT NOT NULL DEFAULT '00:00', -- 每日开抢时间
+    valid_days    INTEGER NOT NULL DEFAULT 1,     -- 领取后有效天数（1 = 当天 23:59 前）
+    status        TEXT NOT NULL DEFAULT 'on',     -- on | off
+    created_at    TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS user_coupons (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    template_id   INTEGER NOT NULL REFERENCES coupon_templates(id),
+    user_id       INTEGER NOT NULL REFERENCES users(id),
+    title         TEXT NOT NULL,
+    amount        INTEGER NOT NULL,
+    threshold     INTEGER NOT NULL,
+    scope         TEXT NOT NULL,
+    claim_date    TEXT NOT NULL,      -- 领取日期（每人每券每天限领 1 张）
+    expires_at    TEXT NOT NULL,
+    status        TEXT NOT NULL DEFAULT 'unused', -- unused | used
+    order_id      INTEGER REFERENCES orders(id),
+    created_at    TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    UNIQUE (template_id, user_id, claim_date)
+);
+CREATE INDEX IF NOT EXISTS idx_user_coupons ON user_coupons(user_id, status);
 
 -- ========== AI 问答（预留） ==========
 

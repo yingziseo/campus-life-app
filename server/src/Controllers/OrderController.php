@@ -8,7 +8,7 @@ use App\Services\OrderService;
 
 final class OrderController
 {
-    private const HIDDEN = ['merchant_amount', 'platform_gross', 'manager_commission', 'rider_commission', 'platform_net', 'manager_id'];
+    private const HIDDEN = ['merchant_amount', 'platform_gross', 'manager_commission', 'rider_commission', 'platform_net', 'manager_id', 'user_coupon_id'];
 
     public function create(Request $req): array
     {
@@ -18,7 +18,7 @@ final class OrderController
             'delivery_point' => $req->str('delivery_point', 40),
             'contact_phone'  => $req->str('contact_phone', 11) ?: null,
             'remark'         => $req->str('remark', 100),
-        ]);
+        ], $req->int('coupon_id'));
         return $this->present($order);
     }
 
@@ -42,7 +42,7 @@ final class OrderController
         }
         $ids = Db::all("SELECT id FROM orders WHERE $where ORDER BY id DESC LIMIT 50", $params);
         $orders = array_map(fn($r) => $this->present(OrderService::find((int) $r['id'])), $ids);
-        $saved = (int) Db::value("SELECT COALESCE(SUM(competitor_amount - goods_amount), 0) FROM orders WHERE user_id = ? AND status IN ('paid','delivering','completed')", [$req->user['id']]);
+        $saved = (int) Db::value("SELECT COALESCE(SUM(competitor_amount - goods_amount + coupon_discount), 0) FROM orders WHERE user_id = ? AND status IN ('paid','ready','delivering','completed')", [$req->user['id']]);
         return ['orders' => $orders, 'total_saved' => $saved];
     }
 

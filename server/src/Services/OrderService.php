@@ -13,7 +13,11 @@ use App\Core\HttpException;
  */
 final class OrderService
 {
-    public static function create(array $user, int $dealId, int $qty, array $takeout = []): array
+    /**
+     * @param array $takeout 外卖：delivery_slot / delivery_point / contact_phone / remark
+     * @param int   $couponId 平台优惠券（user_coupons.id），0 = 不使用
+     */
+    public static function create(array $user, int $dealId, int $qty, array $takeout = [], int $couponId = 0): array
     {
         if ($qty < 1 || $qty > 20) {
             throw new HttpException('购买数量需在 1~20 之间', 422);
@@ -53,6 +57,13 @@ final class OrderService
             $rider       = (int) Settings::get('rider_commission');
         }
 
+        return Db::transaction(static function () use ($user, $deal, $qty, $goods, $merchant, $gross, $commission, $deliveryFee, $rider, $date, $slot, $point, $takeout, $couponId) {
+        $discount = 0;
+        $coupon = null;
+        if ($couponId > 0) {
+            $coupon = CouponService::lock($user, $couponId, $goods, $deal['type']);
+            $discount = $coupon['discount'];
+        }
         $data = [
             'order_no'           => self::newOrderNo(),
             'school_id'          => $user['school_id'],
@@ -66,13 +77,15 @@ final class OrderService
             'unit_price'         => $deal['sale_price'],
             'goods_amount'       => $goods,
             'delivery_fee'       => $deliveryFee,
-            'total_amount'       => $goods + $deliveryFee,
+            'coupon_discount'    => $discount,
+            'user_coupon_id'     => $coupon['id'] ?? null,
+            'total_amount'       => $goods + $deliveryFee - $discount,
             'competitor_amount'  => $deal['competitor_price'] * $qty,
             'merchant_amount'    => $merchant,
             'platform_gross'     => $gross,
             'manager_commission' => $commission,
             'rider_commission'   => $rider,
-            'platform_net'       => $gross - $commission + $deliveryFee - $rider,
+            'platform_net'       => $gross - $commission + $deliveryFee - $rider - $discount,
             'delivery_date'      => $date,
             'delivery_slot'      => $slot,
             'delivery_point'     => $point,
@@ -80,7 +93,11 @@ final class OrderService
             'remark'             => mb_substr((string) ($takeout['remark'] ?? ''), 0, 100),
         ];
         $id = Db::insert('orders', $data);
+        if ($coupon) {
+            CouponService::bind($coupon['id'], $id);
+        }
         return self::find($id);
+        });
     }
 
     /**
@@ -135,6 +152,7 @@ final class OrderService
             $order = self::ownedBy($user, $orderId);
             if ($order['status'] === 'pending_pay') {
                 Db::update('orders', ['status' => 'cancelled'], 'id = :id', ['id' => $orderId]);
+                CouponService::release($order);
                 return self::find($orderId);
             }
             if ($order['status'] !== 'paid') {
@@ -150,6 +168,7 @@ final class OrderService
             Db::run('UPDATE deals SET stock = stock + ?, sold = sold - ? WHERE id = ?',
                 [$order['quantity'], $order['quantity'], $order['deal_id']]);
             Db::update('orders', ['status' => 'refunded'], 'id = :id', ['id' => $orderId]);
+            CouponService::release($order);
             return self::find($orderId);
         });
     }
@@ -209,17 +228,17 @@ final class OrderService
         });
     }
 
-    /** 骑手送达：delivering → completed，写入分账（含骑手提成） */
-    public static function deliver(array $rider, array $orderIds): int
+    /** 骑手送达：delivering → completed，写入分账（含骑手提成）；须上传送达照片留证 */
+    public static function deliver(array $rider, array $orderIds, string $proofImage = ''): int
     {
-        return Db::transaction(function () use ($rider, $orderIds) {
+        return Db::transaction(function () use ($rider, $orderIds, $proofImage) {
             $n = 0;
             foreach ($orderIds as $id) {
                 $order = self::find((int) $id);
                 if (!$order || $order['status'] !== 'delivering' || (int) $order['rider_id'] !== (int) $rider['id']) {
                     continue;
                 }
-                Db::update('orders', ['status' => 'completed', 'completed_at' => now()], 'id = :id', ['id' => $order['id']]);
+                Db::update('orders', ['status' => 'completed', 'completed_at' => now(), 'proof_image' => $proofImage ?: null], 'id = :id', ['id' => $order['id']]);
                 self::writeLedger($order, (int) $order['quantity'], (int) $order['quantity'], true);
                 $n++;
             }
@@ -229,6 +248,7 @@ final class OrderService
 
     /**
      * 按份数写入分账流水。订单快照金额 = 单份金额 × 数量，因此可整除。
+     * 优惠券补贴在订单首次结算时一次性计入平台（负数）。
      */
     private static function writeLedger(array $order, int $units, int $total, bool $withDelivery = false): void
     {
@@ -236,16 +256,22 @@ final class OrderService
         $merchantAmt = $per((int) $order['merchant_amount']);
         $commission  = $per((int) $order['manager_commission']);
         $margin      = $per((int) $order['platform_gross']) - $commission;
-        $base = ['order_id' => $order['id']];
+        $sid = (int) $order['school_id'];
+        $oid = (int) $order['id'];
+        $add = static fn(string $party, ?int $pid, int $amt, string $kind, string $remark) => Ledger::add('order', $sid, $party, $pid, $amt, $kind, $remark, $oid);
 
-        Db::insert('ledger', $base + ['party_type' => 'merchant', 'party_id' => $order['merchant_id'], 'amount' => $merchantAmt, 'kind' => 'settle', 'remark' => $order['title'] . " ×{$units}"]);
+        $isFirst = !Db::value('SELECT 1 FROM ledger WHERE order_id = ?', [$oid]);
+        $add('merchant', (int) $order['merchant_id'], $merchantAmt, 'settle', $order['title'] . " ×{$units}");
         if ($commission > 0) {
-            Db::insert('ledger', $base + ['party_type' => 'manager', 'party_id' => $order['manager_id'], 'amount' => $commission, 'kind' => 'commission', 'remark' => $order['title'] . " ×{$units}"]);
+            $add('manager', (int) $order['manager_id'], $commission, 'commission', $order['title'] . " ×{$units}");
         }
-        Db::insert('ledger', $base + ['party_type' => 'platform', 'party_id' => null, 'amount' => $margin, 'kind' => 'margin', 'remark' => '商品差价']);
+        $add('platform', null, $margin, 'margin', '商品差价');
         if ($withDelivery) {
-            Db::insert('ledger', $base + ['party_type' => 'rider', 'party_id' => $order['rider_id'], 'amount' => (int) $order['rider_commission'], 'kind' => 'delivery', 'remark' => '配送提成 ' . $order['delivery_slot'] . ' ' . $order['delivery_point']]);
-            Db::insert('ledger', $base + ['party_type' => 'platform', 'party_id' => null, 'amount' => $order['delivery_fee'] - $order['rider_commission'], 'kind' => 'delivery', 'remark' => '配送费结余']);
+            $add('rider', (int) $order['rider_id'], (int) $order['rider_commission'], 'delivery', '配送提成 ' . $order['delivery_slot'] . ' ' . $order['delivery_point']);
+            $add('platform', null, $order['delivery_fee'] - $order['rider_commission'], 'delivery', '配送费结余');
+        }
+        if ($isFirst && $order['coupon_discount'] > 0) {
+            $add('platform', null, -(int) $order['coupon_discount'], 'subsidy', '平台优惠券补贴');
         }
     }
 
@@ -255,7 +281,7 @@ final class OrderService
             FROM orders o JOIN merchants m ON m.id = o.merchant_id LEFT JOIN users r ON r.id = o.rider_id WHERE o.id = ?', [$id]);
         if ($o) {
             $o['coupons'] = Db::all('SELECT code, status, used_at FROM coupons WHERE order_id = ? ORDER BY id', [$id]);
-            $o['saved'] = $o['competitor_amount'] - $o['goods_amount'];
+            $o['saved'] = $o['competitor_amount'] - $o['goods_amount'] + $o['coupon_discount'];
         }
         return $o;
     }

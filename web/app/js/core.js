@@ -7,6 +7,9 @@ const { createApp, reactive, ref, computed, watch, onMounted, nextTick } = Vue;
 const store = reactive({
   token: safeGet('token'),
   user: null,
+  config: { price_slogan: '全平台低价', compare_label: '其他平台', errand_fee_rate: 0.05, market_fee_rate: 0.02, delivery_fee: 150, rider_commission: 100, group: {} },
+  img: '',        // 全屏看图
+  photo: null,    // 拍照上传弹层 { title, desc, resolve }
   ready: false,
   toast: '',
   dialog: null,   // { title, content, okText, cancelText, resolve }
@@ -49,6 +52,12 @@ function toast(msg, ms = 1800) {
 function confirmBox(title, content = '', okText = '确定', cancelText = '取消') {
   return new Promise((resolve) => (store.dialog = { title, content, okText, cancelText, resolve }));
 }
+/** 拍照上传留证（送达凭证等），返回图片地址；取消返回 null */
+function askPhoto(title, desc = '') {
+  return new Promise((resolve) => (store.photo = { title, desc, url: '', resolve }));
+}
+const cmpLabel = () => store.config.compare_label || '其他平台';
+const feePct = (r) => Math.round(Number(r || 0) * 1000) / 10 + '%';
 
 /* ---------------- 接口 ---------------- */
 class ApiError extends Error { constructor(msg, code) { super(msg); this.code = code; } }
@@ -126,7 +135,8 @@ const routes = [];
 /** meta: { tab: 底部高亮项, role: 限定角色, guest: 无需登录, school: 需选学校(默认学生需要) } */
 function defineRoute(pattern, component, meta = {}) {
   const keys = [];
-  const regex = new RegExp('^' + pattern.replace(/:(\w+)/g, (_, k) => (keys.push(k), '([^/]+)')) + '$');
+  // :id 只匹配数字，避免与 /market/orders 这类静态路径冲突
+  const regex = new RegExp('^' + pattern.replace(/:(\w+)/g, (_, k) => (keys.push(k), k === 'id' ? '(\\d+)' : '([^/]+)')) + '$');
   routes.push({ pattern, regex, keys, component, meta });
 }
 function parseHash() {
@@ -187,65 +197,63 @@ function useLoad(loader, immediate = true) {
   return { data, loading, error, load };
 }
 
-/* ---------------- 视觉辅助 ---------------- */
+/* ---------------- 视觉规范：类目配色与图标 ---------------- */
 const CAT = {
-  food:      { name: '美食', emoji: '🍜', bg: '#fff1e6' },
-  takeout:   { name: '校园外卖', emoji: '🛵', bg: '#e9f7ff' },
-  netcafe:   { name: '网吧', emoji: '🎮', bg: '#eef0ff' },
-  billiards: { name: '台球', emoji: '🎱', bg: '#eafaf0' },
-  homestay:  { name: '民宿', emoji: '🏡', bg: '#fff6e0' },
-  ktv:       { name: 'KTV', emoji: '🎤', bg: '#ffeef6' },
-  other:     { name: '其他', emoji: '🛍️', bg: '#f1f2f5' },
+  food:      { name: '美食',     icon: 'food',      grad: ['#ffa05c', '#ff5a3c'] },
+  takeout:   { name: '校园外卖', icon: 'takeout',   grad: ['#46c6f2', '#1489de'] },
+  netcafe:   { name: '网吧',     icon: 'netcafe',   grad: ['#8592ff', '#4c55e6'] },
+  billiards: { name: '台球',     icon: 'billiards', grad: ['#34d2b2', '#0b9f86'] },
+  homestay:  { name: '民宿',     icon: 'homestay',  grad: ['#ffc955', '#f39a0b'] },
+  ktv:       { name: 'KTV',      icon: 'ktv',       grad: ['#ff85b6', '#e64a8a'] },
+  other:     { name: '其他',     icon: 'other',     grad: ['#aab3c3', '#7a8597'] },
+  // 校园服务
+  errand:    { name: '跑腿',     icon: 'errand',    grad: ['#ffb14d', '#ff7417'] },
+  express:   { name: '代取快递', icon: 'express',   grad: ['#62a3ff', '#2f6bff'] },
+  market:    { name: '二手',     icon: 'market',    grad: ['#3ad79f', '#0fa36e'] },
+  treehole:  { name: '树洞',     icon: 'treehole',  grad: ['#ad8fff', '#7a4cf5'] },
+  coupons:   { name: '领券',     icon: 'ticket',    grad: ['#ff7d6b', '#f2373a'] },
+  ai:        { name: '百事通',   icon: 'ai',        grad: ['#8b6cff', '#3d8bff'] },
+  groupbuy:  { name: '到店团购', icon: 'ticket',    grad: ['#ffa05c', '#ff5a3c'] },
+  // 二手分类
+  book:      { name: '教材',     icon: 'book',      grad: ['#6caaff', '#3a78ef'] },
+  digital:   { name: '数码',     icon: 'digital',   grad: ['#8f93fb', '#5a5ee2'] },
+  daily:     { name: '生活',     icon: 'daily',     grad: ['#ffb763', '#f2842a'] },
+  sport:     { name: '运动',     icon: 'sport',     grad: ['#40d6a4', '#13a674'] },
 };
 const catOf = (c) => CAT[c] || CAT.other;
+const gradOf = (c) => { const g = catOf(c).grad; return `linear-gradient(135deg, ${g[0]} 0%, ${g[1]} 100%)`; };
+/** 商品封面类目：外卖单列，其余按商家类目 */
+const dealCat = (d) => (d.type === 'takeout' ? 'takeout' : d.category || 'groupbuy');
 const AVATAR_COLORS = ['#ff8a5b', '#5b9dff', '#36c28a', '#a07cff', '#ffb648', '#ff6f91', '#4cc3d9'];
 const avatarColor = (s = '') => AVATAR_COLORS[[...s].reduce((a, c) => a + c.charCodeAt(0), 0) % AVATAR_COLORS.length];
+const TOPIC_COLORS = { 日常: ['#eef4ff', '#2f6bff'], 表白: ['#fff0f6', '#e64a8a'], 吐槽: ['#fff6e5', '#d97706'], 求助: ['#ecfdf3', '#0f9f6e'], 失物招领: ['#f3efff', '#6e4ae6'] };
+const topicStyle = (t) => { const c = TOPIC_COLORS[t] || ['#f2f3f5', '#545b68']; return { background: c[0], color: c[1] }; };
 
 const STATUS = {
-  order: { pending_pay: ['待支付', 'warn'], paid: ['待使用', 'primary'], ready: ['待取餐', 'primary'], delivering: ['配送中', 'primary'], completed: ['已完成', 'ok'], cancelled: ['已取消', ''], refunded: ['已退款', ''] },
-  errand: { open: ['待接单', 'warn'], accepted: ['已接单', 'primary'], delivered: ['已送达', 'primary'], completed: ['已完成', 'ok'], cancelled: ['已取消', ''] },
+  order: { pending_pay: ['待支付', 'warn'], paid: ['待使用', 'brand'], ready: ['待取餐', 'brand'], delivering: ['配送中', 'info'], completed: ['已完成', 'ok'], cancelled: ['已取消', ''], refunded: ['已退款', ''] },
+  errand: { open: ['待接单', 'warn'], accepted: ['已接单', 'brand'], delivered: ['已送达', 'info'], completed: ['已完成', 'ok'], cancelled: ['已取消', ''] },
   merchant: { pending: ['待审核', 'warn'], approved: ['已通过', 'ok'], rejected: ['已驳回', ''] },
-  market: { on_sale: ['在售', 'ok'], reserved: ['已预订', 'warn'], sold: ['已售出', ''], off: ['已下架', ''] },
+  market: { on_sale: ['在售', 'ok'], reserved: ['交易中', 'warn'], sold: ['已售出', ''], off: ['已下架', ''] },
+  trade: { paid: ['待当面交易', 'warn'], completed: ['交易成功', 'ok'], cancelled: ['已取消', ''] },
+  promo: { pending: ['待审核', 'warn'], active: ['投放中', 'ok'], rejected: ['已驳回', ''], ended: ['已结束', ''] },
 };
 const statusText = (type, s) => (STATUS[type]?.[s] || [s])[0];
-/** 订单状态文案区分团购/外卖：外卖已支付显示"待配送" */
+/** 订单状态文案区分团购/外卖 */
 const orderStatus = (o) => (o.type === 'takeout' && o.status === 'paid' ? '商家备餐中' : o.type === 'takeout' && o.status === 'ready' ? '已出餐，待骑手取餐' : statusText('order', o.status));
 const statusCls = (type, s) => 'tag ' + ((STATUS[type]?.[s] || [])[1] || '');
 
-/* ---------------- 图标 ---------------- */
-const ICONS = {
-  home: 'M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z',
-  compass: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zm3.5-12.5-2 5-5 2 2-5z',
-  plus: 'M12 5v14M5 12h14',
-  receipt: 'M6 3h12v18l-3-2-3 2-3-2-3 2zM9 8h6M9 12h6',
-  user: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm-7 9a7 7 0 0 1 14 0',
-  back: 'M15 5l-7 7 7 7',
-  right: 'M9 5l7 7-7 7',
-  heart: 'M12 20s-7-4.5-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.5-7 10-7 10z',
-  chat: 'M4 5h16v11H9l-5 4z',
-  search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zm9 3-4.5-4.5',
-  scan: 'M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4M4 12h16',
-  grid: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z',
-  chart: 'M4 20V10M10 20V4M16 20v-7M22 20H2',
-  wallet: 'M3 7h18v13H3zM3 7l3-4h12l3 4M16 13h2',
-  store: 'M4 9l1.5-5h13L20 9M4 9v11h16V9M4 9h16M9 20v-6h6v6',
-  location: 'M12 21s7-6 7-12a7 7 0 0 0-14 0c0 6 7 12 7 12zm0-9a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
-  clock: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zm0-14v5l3 2',
-  swap: 'M7 7h13l-4-4M17 17H4l4 4',
-  calc: 'M6 3h12v18H6zM9 7h6M9 12h1M14 12h1M9 16h1M14 16h1',
-};
+/* ---------------- 通用组件 ---------------- */
+/** Lucide 线性图标 */
 const Icon = {
-  props: { name: String, size: { type: [Number, String], default: 22 }, stroke: { type: Number, default: 1.8 } },
-  template: `<svg :width="size" :height="size" viewBox="0 0 24 24" fill="none" stroke="currentColor" :stroke-width="stroke" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="ICONS[name]"/></svg>`,
+  props: { name: String, size: { type: [Number, String], default: 22 }, stroke: { type: [Number, String], default: 1.8 } },
+  template: `<svg class="i" :width="size" :height="size" viewBox="0 0 24 24" fill="none" stroke="currentColor" :stroke-width="stroke" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" v-html="ICONS[name] || ''"></svg>`,
   setup() { return { ICONS }; },
 };
 
-/* ---------------- 通用组件 ---------------- */
 const NavBar = {
   props: { title: String, back: { type: [Boolean, String], default: false }, variant: { type: String, default: '' } },
-  components: { Icon },
   template: `<div class="nav" :class="variant">
-      <button v-if="back" class="nav-back" @click="goBack" aria-label="返回"><Icon name="back" /></button>
+      <button v-if="back" class="nav-back" @click="goBack" aria-label="返回"><Icon name="back" :size="24" /></button>
       <div v-else class="nav-left"><slot name="left" /></div>
       <div class="nav-title">{{ title }}</div>
       <div class="capsule" aria-hidden="true"><span><i></i></span><span><b></b></span></div>
@@ -262,14 +270,14 @@ const TABS = {
     { key: 'me', text: '我的', icon: 'user', path: '/me' },
   ],
   merchant: [
-    { key: 'm-home', text: '工作台', icon: 'grid', path: '/m' },
+    { key: 'm-home', text: '工作台', icon: 'dashboard', path: '/m' },
     { key: 'm-deals', text: '商品', icon: 'store', path: '/m/deals' },
     { key: 'm-verify', text: '核销', icon: 'scan', path: '/m/verify' },
     { key: 'm-orders', text: '订单', icon: 'receipt', path: '/m/orders' },
     { key: 'me', text: '我的', icon: 'user', path: '/me' },
   ],
   rider: [
-    { key: 'r-home', text: '配送任务', icon: 'clock', path: '/r' },
+    { key: 'r-home', text: '配送任务', icon: 'route', path: '/r' },
     { key: 'r-earnings', text: '我的收入', icon: 'wallet', path: '/r/earnings' },
     { key: 'back', text: '学生端', icon: 'swap', path: '/' },
   ],
@@ -283,11 +291,10 @@ const TABS = {
 };
 const TabBar = {
   props: { active: String, set: String },
-  components: { Icon },
   template: `<nav class="tabbar">
-      <button v-for="t in tabs" :key="t.key" class="tab" :class="{ on: t.key === active }" @click="tap(t)">
+      <button v-for="t in tabs" :key="t.key" class="tab" :class="{ on: t.key === active }" @click="tap(t)" :aria-label="t.text || '发布'">
         <span v-if="t.action" class="plus"><Icon :name="t.icon" :size="24" :stroke="2.4" /></span>
-        <template v-else><Icon :name="t.icon" /><span>{{ t.text }}</span></template>
+        <template v-else><Icon :name="t.icon" :size="23" :stroke="t.key === active ? 2.1 : 1.7" /><span>{{ t.text }}</span></template>
       </button>
     </nav>`,
   computed: { tabs() { return TABS[this.set || store.user?.role] || TABS.student; } },
@@ -295,13 +302,19 @@ const TabBar = {
 };
 
 const Empty = {
-  props: { text: { type: String, default: '暂无内容' }, icon: { type: String, default: '🍃' } },
-  template: `<div class="empty"><div class="ico">{{ icon }}</div><div>{{ text }}</div><slot /></div>`,
+  props: { text: { type: String, default: '暂无内容' }, icon: { type: String, default: 'box' } },
+  template: `<div class="empty"><div class="ico"><Icon :name="icon" :size="32" :stroke="1.5" /></div><div>{{ text }}</div><slot /></div>`,
 };
+const Loading = { template: `<div class="loading"><span class="spinner"></span>加载中</div>` };
 
+/** 进度条：current 为当前步骤下标，-1 表示未开始 */
 const Steps = {
   props: { items: Array, current: Number },
-  template: `<div class="steps"><div v-for="(s, i) in items" :key="s" class="step" :class="{ on: i <= current }"><i></i>{{ s }}</div></div>`,
+  template: `<div class="steps">
+      <div class="bar" :style="{ width: (Math.max(0, current) / (items.length - 1) * 80) + '%' }"></div>
+      <div v-for="(s, i) in items" :key="s" class="step" :class="{ done: i < current, cur: i === current }">
+        <i><Icon v-if="i < current" name="check" :size="11" :stroke="3.5" /></i>{{ s }}</div>
+    </div>`,
 };
 
 /** 发布入口底部弹层（学生端中间 + 号） */
@@ -309,33 +322,34 @@ const PublishSheet = {
   template: `<div class="mask" @click.self="close"><div class="sheet">
       <div class="sheet-title">发布</div>
       <div class="sheet-grid">
-        <div class="entry" v-for="e in entries" :key="e.text" @click="open(e.path)">
-          <div class="ico" :style="{ background: e.bg }">{{ e.emoji }}</div>{{ e.text }}
-        </div>
+        <button class="entry" v-for="e in entries" :key="e.c" @click="open(e.path)">
+          <div class="tile" :style="{ background: gradOf(e.c) }"><Icon :name="catOf(e.c).icon" :size="26" :stroke="2" /></div>{{ e.text }}
+        </button>
       </div>
-      <button class="btn line block" @click="close">取消</button>
+      <button class="btn ghost block" style="box-shadow:none;background:#f5f6f8" @click="close">取消</button>
     </div></div>`,
   setup() {
     const entries = [
-      { text: '跑腿', emoji: '🏃', bg: '#fff1e6', path: '/errands/new?type=errand' },
-      { text: '代取快递', emoji: '📦', bg: '#e9f7ff', path: '/errands/new?type=express' },
-      { text: '卖二手', emoji: '♻️', bg: '#eafaf0', path: '/market/new' },
-      { text: '发树洞', emoji: '🌳', bg: '#f2eefe', path: '/treehole/new' },
+      { c: 'errand', text: '跑腿', path: '/errands/new?type=errand' },
+      { c: 'express', text: '代取快递', path: '/errands/new?type=express' },
+      { c: 'market', text: '卖闲置', path: '/market/new' },
+      { c: 'treehole', text: '发树洞', path: '/treehole/new' },
     ];
     const close = () => (store.sheet = null);
-    return { entries, close, open: (p) => { close(); go(p); } };
+    return { entries, close, gradOf, catOf, open: (p) => { close(); go(p); } };
   },
 };
 
 /** 多图选择上传（max=1 时为单图） */
 const ImagePicker = {
-  props: { modelValue: { type: [Array, String], default: () => [] }, max: { type: Number, default: 6 }, label: { type: String, default: '添加图片' } },
+  props: { modelValue: { type: [Array, String], default: () => [] }, max: { type: Number, default: 6 }, label: { type: String, default: '添加图片' }, icon: { type: String, default: 'image' }, large: Boolean },
   emits: ['update:modelValue'],
   template: `<div class="pics">
-      <div v-for="(u, i) in list" :key="u" class="pic"><img :src="u" alt=""><button class="pic-del" @click="remove(i)" aria-label="删除">×</button></div>
-      <label v-if="list.length < max" class="pic add" :class="{ busy }">
+      <div v-for="(u, i) in list" :key="u" class="pic" :class="{ lg: large }"><img :src="u" alt=""><button class="pic-del" @click="remove(i)" aria-label="删除"><Icon name="x" :size="12" :stroke="2.5" /></button></div>
+      <label v-if="list.length < max" class="pic add" :class="{ busy, lg: large }">
         <input type="file" accept="image/*" :multiple="max > 1" @change="pick" hidden>
-        <span>{{ busy ? '上传中…' : '＋' }}</span><small v-if="!busy">{{ label }}</small>
+        <template v-if="busy"><span class="spinner"></span><small>上传中</small></template>
+        <template v-else><Icon :name="icon" :size="large ? 30 : 24" :stroke="1.6" /><small>{{ label }}</small></template>
       </label>
     </div>`,
   setup(props, { emit }) {
@@ -356,11 +370,19 @@ const ImagePicker = {
   },
 };
 
-/** 有图显示图片，没图用品类 emoji 占位 */
+/** 封面：有图显示图片，没图用类目渐变 + 线性图标占位 */
 const Cover = {
-  props: { src: String, emoji: String, bg: String, cls: { type: String, default: '' } },
-  template: `<div :class="cls" :style="{ background: src ? '#eee' : bg }" class="cover-box"><img v-if="src" :src="src" alt="" loading="lazy"><template v-else>{{ emoji }}</template><slot /></div>`,
+  props: { src: String, cat: { type: String, default: 'other' }, icon: { type: Number, default: 30 }, cls: { type: String, default: '' } },
+  template: `<div class="cover-box" :class="cls" :style="{ background: src ? '#eef1f4' : gradOf(cat) }">
+      <img v-if="src" :src="src" alt="" loading="lazy"><div v-else class="ph"><Icon :name="catOf(cat).icon" :size="icon" :stroke="1.6" /></div><slot /></div>`,
+  setup() { return { gradOf, catOf }; },
 };
 
-const Globals = { Icon, NavBar, TabBar, Empty, Steps, ImagePicker, Cover };
-const helpers = { orderStatus, yuan, pct, timeAgo, shortTime, catOf, avatarColor, statusText, statusCls, store };
+/** 价格：¥ 小号 + 金额 */
+const Price = {
+  props: { v: [Number, String], size: { type: String, default: '' } },
+  template: `<span class="price" :class="size"><small>¥</small>{{ yuan(v) }}</span>`,
+  setup() { return { yuan }; },
+};
+
+const Globals = { Icon, NavBar, TabBar, Empty, Loading, Steps, ImagePicker, Cover, Price };

@@ -105,6 +105,19 @@ check('验证码登录自动注册', (bool) $new);
 check('未选学校时提示 412', api('GET', '/api/home', [], $new)['code'] === 412);
 check('不能选择未开通学校', api('POST', '/api/auth/school', ['school_id' => 2], $new)['code'] === 422);
 check('选择试点学校', $ok(api('POST', '/api/auth/school', ['school_id' => 1], $new)));
+// 上传工具（送达凭证等需要真实上传的图片）
+$png = sys_get_temp_dir() . '/campus-upload-' . getmypid() . '.png';
+file_put_contents($png, base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='));
+$up = static function (string $file, string $mime) use ($port, $new): array {
+    $ch = curl_init("http://127.0.0.1:$port/api/upload");
+    curl_setopt_array($ch, [CURLOPT_POST => true, CURLOPT_RETURNTRANSFER => true, CURLOPT_HTTPHEADER => ["Authorization: Bearer $new"],
+        CURLOPT_POSTFIELDS => ['file' => new CURLFile($file, $mime)]]);
+    $r = json_decode((string) curl_exec($ch), true);
+    curl_close($ch);
+    return $r;
+};
+$proof = $up($png, 'image/png')['data']['url'] ?? '';
+check('公共配置接口（比价文案不点名竞品）', ($c = api('GET', '/api/config')) && $ok($c) && $c['data']['price_slogan'] === '全平台低价' && !str_contains(json_encode($c['data'], JSON_UNESCAPED_UNICODE), '美团'));
 
 // 跑腿
 $r = api('POST', '/api/errands', ['type' => 'express', 'title' => '取个快递', 'deliver_addr' => '5号楼', 'express_station' => '菜鸟', 'express_code' => '1-2-3', 'reward' => 3], $new);
@@ -113,11 +126,28 @@ $eid = $r['data']['id'];
 check('非接单人看不到取件码', api('GET', "/api/errands/$eid", [], $stu)['data']['express_code'] === '接单后可见');
 check('不能接自己的单', api('POST', "/api/errands/$eid/accept", [], $new)['code'] === 422);
 check('接单后可见取件码', $ok(api('POST', "/api/errands/$eid/accept", [], $stu)) && api('GET', "/api/errands/$eid", [], $stu)['data']['express_code'] === '1-2-3');
-check('送达 → 确认完成', $ok(api('POST', "/api/errands/$eid/deliver", [], $stu)) && api('POST', "/api/errands/$eid/complete", [], $new)['data']['status'] === 'completed');
+check('跑腿服务费 5%：赏金 3 元抽 0.15', api('GET', "/api/errands/$eid", [], $stu)['data']['runner_income'] === 285);
+check('送达未拍照被拒绝', api('POST', "/api/errands/$eid/deliver", [], $stu)['code'] === 422);
+check('拍照送达', api('POST', "/api/errands/$eid/deliver", ['proof_image' => $proof], $stu)['data']['proof_image'] === $proof);
+$w0 = api('GET', '/api/wallet', [], $stu)['data']['total'];
+check('确认完成', api('POST', "/api/errands/$eid/complete", [], $new)['data']['status'] === 'completed');
+check('接单人钱包到账 2.85 元', api('GET', '/api/wallet', [], $stu)['data']['total'] === $w0 + 285);
+check('重复确认被拒绝', api('POST', "/api/errands/$eid/complete", [], $new)['code'] === 422);
 
 // 二手 & 树洞 & AI
 check('发布二手', $ok(api('POST', '/api/market', ['title' => '台灯', 'price' => '25.5', 'category' => 'digital', 'contact' => 'wx'], $new)));
 check('二手列表金额为分', api('GET', '/api/market', [], $stu)['data'][0]['price'] === 2550);
+$mid = api('GET', '/api/market', [], $stu)['data'][0]['id'];
+check('下单前不暴露卖家联系方式', api('GET', "/api/market/$mid", [], $stu)['data']['contact'] === null);
+check('不能买自己的二手', api('POST', "/api/market/$mid/buy", [], $new)['code'] === 422);
+$mo = api('POST', "/api/market/$mid/buy", [], $stu)['data'];
+check('担保交易下单：服务费 2%', $mo['price'] === 2550 && $mo['fee'] === 51 && $mo['status'] === 'paid');
+check('下单后宝贝已预订、不可重复购买', api('POST', "/api/market/$mid/buy", [], $new)['code'] === 422);
+check('卖家不能代买家确认收货', api('POST', "/api/market-orders/{$mo['id']}/confirm", [], $new)['code'] === 403);
+$w1 = api('GET', '/api/wallet', [], $new)['data']['total'];
+check('买家确认收货', api('POST', "/api/market-orders/{$mo['id']}/confirm", [], $stu)['data']['status'] === 'completed');
+check('卖家到账 = 成交价 - 服务费', api('GET', '/api/wallet', [], $new)['data']['total'] === $w1 + 2499);
+check('我卖出的列表', count(api('GET', '/api/market-orders?role=sell', [], $new)['data']) === 1);
 $r = api('POST', '/api/treehole', ['content' => '今天食堂的红烧肉绝了', 'tag' => '日常'], $new);
 check('树洞发帖且不暴露 user_id', $ok($r) && !isset($r['data']['user_id']));
 $pid = $r['data']['id'];
@@ -125,6 +155,22 @@ check('树洞点赞/取消', api('POST', "/api/treehole/$pid/like", [], $stu)['d
 check('楼主评论显示洞主', api('POST', "/api/treehole/$pid/comments", ['content' => '真的'], $new)['data']['anon_name'] === '洞主');
 check('敏感词拦截', api('POST', '/api/treehole', ['content' => '加我微信号'], $new)['code'] === 422);
 check('AI 问答 FAQ 兜底命中', ($r = api('POST', '/api/ai/ask', ['question' => '校园卡丢了怎么办'], $stu)) && $r['data']['source'] === 'faq');
+
+// 首页推荐位：行业推荐位置顶，其余按销量
+$home = api('GET', '/api/home', [], $stu)['data'];
+check('首页推荐：推荐位商品置顶并标注广告', $home['hot_deals'][0]['is_ad'] === true);
+$rec = api('GET', '/api/local/recommend?category=food', [], $stu)['data'];
+check('分行业推荐：美食第 1 位为购买推荐位的商品', $rec[0]['is_ad'] === true && $rec[0]['merchant_name'] === '甜心奶茶铺');
+check('分行业推荐：其余按销量', !$rec[1]['is_ad'] && $rec[1]['sold'] >= $rec[count($rec) - 1]['sold']);
+check('周边商家列表：推荐位商家在前', api('GET', '/api/local/merchants?category=netcafe', [], $stu)['data'][0]['is_ad'] === true);
+
+// 领券中心：福利群每日发券
+$today = api('GET', '/api/coupons/today', [], $new)['data'];
+$tk = array_values(array_filter($today['templates'], fn($t) => $t['scope'] === 'takeout'))[0];
+check('今日可抢券列表', count($today['templates']) >= 3 && isset($today['group']['name']));
+$myc = api('POST', "/api/coupons/{$tk['id']}/claim", [], $new)['data'];
+check('抢券成功', $myc['amount'] === 200 && $myc['status'] === 'unused');
+check('同一张券每天限领 1 次', api('POST', "/api/coupons/{$tk['id']}/claim", [], $new)['code'] === 422);
 
 // 本地生活：团购下单 → 支付 → 核销 → 分账
 $detail = api('GET', '/api/local/merchants/1', [], $stu)['data'];
@@ -151,6 +197,13 @@ check('未核销订单可退款', api('POST', "/api/orders/{$o2['id']}/cancel", 
 // 外卖：固定时间点
 $take = array_values(array_filter($detail['deals'], fn($d) => $d['type'] === 'takeout'))[0];
 check('外卖未选时间点被拒绝', api('POST', '/api/orders', ['deal_id' => $take['id'], 'quantity' => 1], $new)['code'] === 422);
+check('外卖券不能用于团购', api('POST', '/api/orders', ['deal_id' => $deal['id'], 'quantity' => 1, 'coupon_id' => $myc['id']], $new)['code'] === 422);
+check('下单页可用券', in_array($myc['id'], array_column(api('GET', "/api/coupons/usable?deal_id={$take['id']}&quantity=1", [], $new)['data'], 'id')));
+$oc = api('POST', '/api/orders', ['deal_id' => $take['id'], 'quantity' => 1, 'delivery_slot' => '11:30', 'delivery_point' => '东门取餐柜', 'coupon_id' => $myc['id']], $new)['data'];
+check('用券下单：实付 = 12 + 1.5 - 2 = 11.5', $oc['coupon_discount'] === 200 && $oc['total_amount'] === 1150 && $oc['saved'] === 700);
+check('券已被占用', api('GET', '/api/coupons/mine', [], $new)['data'] === []);
+api('POST', "/api/orders/{$oc['id']}/cancel", [], $new);
+check('取消订单后券退回', count(api('GET', '/api/coupons/mine', [], $new)['data']) === 1);
 $o3 = api('POST', '/api/orders', ['deal_id' => $take['id'], 'quantity' => 1, 'delivery_slot' => '11:30', 'delivery_point' => '东门取餐柜'], $new)['data'];
 check('外卖含配送费 1.5', $o3['delivery_fee'] === 150 && $o3['total_amount'] === 1350);
 api('POST', "/api/orders/{$o3['id']}/pay", [], $new);
@@ -165,9 +218,10 @@ check('骑手查看批次取餐清单', ($r = api('GET', '/api/rider/batch?date=
 check('骑手取餐', api('POST', '/api/rider/pickup', ['order_ids' => [$o3['id']]], $rider)['data']['picked'] === 1);
 check('取餐后可见完整手机号', str_contains(json_encode(api('GET', '/api/rider/batch?date=' . $o3d['delivery_date'] . '&slot=11:30', [], $rider)['data']['drops']), '"mine":true'));
 $before = api('GET', '/api/rider/dashboard', [], $rider)['data']['total_earning'];
-check('骑手送达并获得提成 1 元', api('POST', '/api/rider/deliver', ['order_ids' => [$o3['id']]], $rider)['data']['earning'] === 100
+check('骑手送达未拍照被拒绝', api('POST', '/api/rider/deliver', ['order_ids' => [$o3['id']]], $rider)['code'] === 422);
+check('骑手送达并获得提成 1 元', api('POST', '/api/rider/deliver', ['order_ids' => [$o3['id']], 'proof_image' => $proof], $rider)['data']['earning'] === 100
     && api('GET', '/api/rider/dashboard', [], $rider)['data']['total_earning'] === $before + 100);
-check('送达后订单完成', api('GET', "/api/orders/{$o3['id']}", [], $new)['data']['status'] === 'completed');
+check('送达后订单完成且学生可见送达照片', ($r = api('GET', "/api/orders/{$o3['id']}", [], $new)['data']) && $r['status'] === 'completed' && $r['proof_image'] === $proof);
 check('学生申请加入外卖团队', api('POST', '/api/rider/apply', [], $new)['data']['rider_status'] === 'pending');
 
 // 商家定价 & 上架
@@ -176,6 +230,15 @@ check('商家定价试算', $ok($r) && $r['data']['sale_price'] === 1150);
 $r = api('POST', '/api/merchant/deals', ['type' => 'groupbuy', 'title' => '测试套餐', 'pricing_mode' => 'fixed', 'competitor_price' => 20, 'merchant_settle' => 13, 'sale_price' => 16], $mer);
 check('商家上架新商品', $ok($r) && $r['data']['sale_price'] === 1600);
 check('不合规定价不能上架', api('POST', '/api/merchant/deals', ['type' => 'groupbuy', 'title' => 'x', 'pricing_mode' => 'fixed', 'competitor_price' => 20, 'merchant_settle' => 13, 'sale_price' => 19.5], $mer)['code'] === 422);
+
+// 商家购买首页推荐位
+$pr = api('GET', '/api/merchant/promotions', [], $mer)['data'];
+check('商家查看推荐位（含外卖行业）', in_array('takeout', array_column($pr['categories'], 'category')) && count($pr['categories'][0]['slots']) === 3);
+check('已被占用的推荐位不能购买', api('POST', '/api/merchant/promotions', ['deal_id' => $pr['deals'][0]['id'], 'position' => 2, 'days' => 3, 'start_date' => date('Y-m-d', strtotime('+2 day'))], $mer)['code'] === 422);
+$tkDeal = array_values(array_filter($pr['deals'], fn($d) => $d['type'] === 'takeout'))[0];
+check('同一商品同期不能重复购买', api('POST', '/api/merchant/promotions', ['deal_id' => $pr['deals'][0]['id'], 'position' => 3, 'days' => 2], $mer)['code'] === 422);
+$newPromo = api('POST', '/api/merchant/promotions', ['deal_id' => $tkDeal['id'], 'position' => 3, 'days' => 2], $mer)['data'];
+check('购买推荐位：按天计费、待审核', $newPromo['status'] === 'pending' && $newPromo['fee'] === 1600);
 
 // 商家入驻 → 客户经理审核
 $boss = api('POST', '/api/auth/login', ['phone' => '13900002222', 'code' => '1234'])['data']['token'];
@@ -198,16 +261,6 @@ api('POST', "/api/treehole/$p2/report", ['reason' => '其他'], $rider);
 check('举报 3 次自动隐藏', api('GET', "/api/treehole/$p2/comments", [], $stu)['code'] === 404);
 
 // 图片上传
-$png = sys_get_temp_dir() . '/campus-upload-' . getmypid() . '.png';
-file_put_contents($png, base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='));
-$up = static function (string $file, string $mime) use ($port, $new): array {
-    $ch = curl_init("http://127.0.0.1:$port/api/upload");
-    curl_setopt_array($ch, [CURLOPT_POST => true, CURLOPT_RETURNTRANSFER => true, CURLOPT_HTTPHEADER => ["Authorization: Bearer $new"],
-        CURLOPT_POSTFIELDS => ['file' => new CURLFile($file, $mime)]]);
-    $r = json_decode((string) curl_exec($ch), true);
-    curl_close($ch);
-    return $r;
-};
 $r = $up($png, 'image/png');
 check('上传图片', $ok($r) && preg_match('#^/uploads/\d{6}/[a-f0-9]{24}\.png$#', $r['data']['url']));
 $url = $r['data']['url'];
@@ -217,6 +270,7 @@ check('非图片被拒绝', $up($png . '.txt', 'image/png')['code'] === 422);
 $item = api('POST', '/api/market', ['title' => '带图', 'price' => 10, 'contact' => 'x', 'images' => [$url, 'http://evil.com/a.png']], $new)['data'];
 check('二手图片仅保留本站地址', $item['images'] === [$url]);
 @unlink($png); @unlink($png . '.txt');
+@unlink(APP_ROOT . str_replace('/uploads', '/storage/uploads', $proof));
 @unlink(APP_ROOT . $url = str_replace('/uploads', '/storage/uploads', $url));
 
 // 管理后台
@@ -242,6 +296,20 @@ check('后台新增 FAQ 后问答命中', api('POST', '/api/ai/ask', ['question'
 check('后台恢复被隐藏帖子', api('POST', "/api/admin/treehole/$p2/restore", [], $adm)['data']['status'] === 'normal' && $ok(api('GET', "/api/treehole/$p2/comments", [], $stu)));
 check('后台驳回商家', api('POST', "/api/admin/merchants/$newMid/reject", [], $adm)['data']['status'] === 'rejected');
 check('后台流水汇总', count(api('GET', '/api/admin/ledger', [], $adm)['data']['summary']) >= 4);
+$before = api('GET', '/api/admin/revenue', [], $adm)['data'];
+check('收益分配：平台收入按来源拆分', count($before['platform']) === 6 && $before['platform_net'] === array_sum(array_column($before['platform'], 'amount')));
+check('收益分配：含跑腿 / 二手服务费与优惠券补贴', array_column($before['platform'], 'amount', 'kind')['errand_fee'] > 0 && array_column($before['platform'], 'amount', 'kind')['subsidy'] < 0);
+check('后台审核推荐位 → 广告费入账', api('POST', "/api/admin/promotions/{$newPromo['id']}/approve", [], $adm)['data']['status'] === 'active'
+    && array_column(api('GET', '/api/admin/revenue', [], $adm)['data']['platform'], 'amount', 'kind')['ad'] === array_column($before['platform'], 'amount', 'kind')['ad'] + 1600);
+check('后台推荐位排期看板', count(api('GET', '/api/admin/promotions', [], $adm)['data']['board']) === 7);
+$tpl = api('POST', '/api/admin/coupons', ['title' => '测试券', 'amount' => 1, 'threshold' => 5, 'scope' => 'all', 'daily_quota' => 1, 'start_time' => '00:00'], $adm)['data'];
+check('后台新建优惠券', $tpl['amount'] === 100 && $tpl['status'] === 'on');
+api('POST', "/api/coupons/{$tpl['id']}/claim", [], $stu);
+check('每日限量抢完即止', api('POST', "/api/coupons/{$tpl['id']}/claim", [], $mgr)['code'] === 422);
+check('后台下线优惠券', api('POST', "/api/admin/coupons/{$tpl['id']}", [], $adm)['data']['status'] === 'off');
+check('修改比价文案', api('POST', '/api/admin/settings', ['price_slogan' => '学生专享价', 'errand_fee_rate' => 0.03], $adm)['data']['price_slogan'] === '学生专享价'
+    && api('GET', '/api/config')['data']['errand_fee_rate'] == 0.03);
+check('抽成费率越界被拒绝', api('POST', '/api/admin/settings', ['market_fee_rate' => 0.5], $adm)['code'] === 422);
 
 echo "\n" . ($failed ? "\033[31m失败 " . count($failed) . " 项\033[0m，" : "\033[32m全部通过\033[0m，") . "通过 $passed 项\n";
 exit($failed ? 1 : 0);

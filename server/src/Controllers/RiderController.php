@@ -50,7 +50,7 @@ final class RiderController
         $date = $req->str('date', 10, true, '日期');
         $slot = $req->str('slot', 5, true, '时间点');
         $orders = Db::all(
-            "SELECT o.id, o.order_no, o.title, o.quantity, o.status, o.delivery_point, o.contact_phone, o.remark, o.rider_id,
+            "SELECT o.id, o.order_no, o.title, o.quantity, o.status, o.delivery_point, o.contact_phone, o.remark, o.rider_id, o.proof_image,
                     m.id AS merchant_id, m.name AS merchant_name, m.address AS merchant_address, u.nickname
              FROM orders o JOIN merchants m ON m.id = o.merchant_id JOIN users u ON u.id = o.user_id
              WHERE o.school_id = ? AND o.type = 'takeout' AND o.delivery_date = ? AND o.delivery_slot = ?
@@ -90,7 +90,11 @@ final class RiderController
     public function deliver(Request $req): array
     {
         $ids = array_map('intval', (array) $req->input('order_ids', []));
-        $n = OrderService::deliver($req->user, $ids);
+        $proof = UploadController::checkUrl($req->str('proof_image', 200));
+        if (!$proof) {
+            throw new HttpException('请在取餐点拍照上传送达照片', 422);
+        }
+        $n = OrderService::deliver($req->user, $ids, $proof);
         if (!$n) {
             throw new HttpException('没有可送达的订单', 422);
         }

@@ -25,15 +25,15 @@ final class ManagerController
             'commission_total' => $sum(),
             'commission_today' => $sum('AND date(created_at) = ?', [date('Y-m-d')]),
             'commission_month' => $sum("AND strftime('%Y-%m', created_at) = ?", [date('Y-m')]),
-            'order_count'      => (int) Db::value("SELECT COUNT(*) FROM orders WHERE manager_id = ? AND status IN ('paid','delivering','completed')", [$uid]),
-            'gmv'              => (int) Db::value("SELECT COALESCE(SUM(goods_amount),0) FROM orders WHERE manager_id = ? AND status IN ('paid','delivering','completed')", [$uid]),
+            'order_count'      => (int) Db::value("SELECT COUNT(*) FROM orders WHERE manager_id = ? AND status IN ('paid','ready','delivering','completed')", [$uid]),
+            'gmv'              => (int) Db::value("SELECT COALESCE(SUM(goods_amount),0) FROM orders WHERE manager_id = ? AND status IN ('paid','ready','delivering','completed')", [$uid]),
         ];
     }
 
     public function merchants(Request $req): array
     {
         return Db::all(
-            "SELECT m.id, m.name, m.category, m.address, m.phone, m.status, m.created_at, m.takeout_enabled,
+            "SELECT m.id, m.name, m.category, m.address, m.phone, m.status, m.created_at, m.takeout_enabled, m.cover,
                     (SELECT COUNT(*) FROM orders o WHERE o.merchant_id = m.id AND o.status IN ('paid','delivering','completed')) AS orders,
                     (SELECT COALESCE(SUM(l.amount),0) FROM ledger l WHERE l.party_type = 'manager' AND l.party_id = m.manager_id
                         AND l.order_id IN (SELECT id FROM orders WHERE merchant_id = m.id)) AS commission

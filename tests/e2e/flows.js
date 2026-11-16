@@ -1,4 +1,5 @@
-/* 浏览器交互测试：核销、定价试算、AI 问答、经理审核、发树洞、发跑腿 */
+/* 浏览器交互测试：核销、定价试算、百事通、经理审核、发树洞、发跑腿（托管支付）、外卖全链路（拍照送达）、
+ * 领券、代取快递拍照送达、二手确认收货、商家购买推荐位、二手传图、树洞举报 */
 const { chromium } = require('playwright-core');
 const BASE = process.env.BASE_URL || 'http://127.0.0.1:8100';
 const CHROMIUM = process.env.CHROMIUM_PATH || '/usr/bin/chromium-browser';
@@ -9,6 +10,14 @@ fs.mkdirSync(__dirname + '/shots', { recursive: true });
   const errs = [];
   const p = await b.newPage({ viewport: { width: 390, height: 693 } });
   p.on('pageerror', (e) => errs.push(e.message));
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+  const okDialog = async () => { const btns = await p.$$('.dialog .db button'); if (btns[1]) await btns[1].click(); await p.waitForTimeout(600); };
+  // 拍照上传弹层：选图 → 确认提交
+  const photo = async () => {
+    await p.waitForSelector('.sheet .pic.add input', { state: 'attached' });
+    await p.setInputFiles('.sheet .pic.add input', { name: 'proof.png', mimeType: 'image/png', buffer: png });
+    await p.waitForSelector('.sheet .pic img'); await p.click('.sheet button:has-text("确认提交")'); await p.waitForTimeout(800);
+  };
 
   // 商家核销演示券码
   await p.goto(`${BASE}/app/?as=merchant#/m/verify`); await p.waitForTimeout(900);
@@ -18,7 +27,7 @@ fs.mkdirSync(__dirname + '/shots', { recursive: true });
     await cells[0].click();
     await p.click('.card.center .btn');
     await p.waitForTimeout(600);
-    console.log('history rows:', (await p.$$('.tag.ok')).length);
+    console.log('verify toast:', await p.innerText('.toast').catch(() => '无'));
   }
 
   // 商品编辑试算
@@ -53,7 +62,7 @@ fs.mkdirSync(__dirname + '/shots', { recursive: true });
   await p.evaluate(() => (location.hash = '/errands/new?type=express')); await p.waitForTimeout(500);
   const ins = await p.$$('.form input');
   await ins[0].fill('取快递'); await ins[1].fill('菜鸟'); await ins[2].fill('1-1-1'); await ins[3].fill('5号楼');
-  await p.click('.action-bar .btn'); await p.waitForTimeout(800);
+  await p.click('.action-bar .btn'); await p.waitForTimeout(300); await okDialog();
   console.log('errand hash:', await p.evaluate(() => location.hash));
   await p.screenshot({ path: __dirname + '/shots/errand_detail.png' });
 
@@ -73,8 +82,7 @@ fs.mkdirSync(__dirname + '/shots', { recursive: true });
   console.log('merchant ready clicked:', clicked);
   await p.goto(`${BASE}/app/?as=rider#/r`); await p.waitForTimeout(900);
   await p.screenshot({ path: __dirname + '/shots/rider_home.png' });
-  const batchCards = await p.$$('.page .card');
-  await batchCards[1].click(); await p.waitForTimeout(800);
+  await p.click(`.card.tap:has-text("${slot.split(' ').pop()}")`); await p.waitForTimeout(800);
   let picks = 0;
   for (;;) {
     const btn = await p.$('.pickup-head .btn');
@@ -89,22 +97,44 @@ fs.mkdirSync(__dirname + '/shots', { recursive: true });
     const btn = await p.$('.pickup-head .btn');
     if (!btn || drops > 10) break;
     await btn.click(); await p.waitForTimeout(300);
-    const ok = await p.$$('.dialog .db button');
-    await ok[1].click(); drops++; await p.waitForTimeout(700);
+    await photo(); drops++;
   }
-  console.log('rider drop groups:', drops);
+  console.log('rider drop groups (photo):', drops, '| proof shown:', !!(await p.$('.proof img')));
   await p.goto(`${BASE}/app/?as=student${orderHash}`); await p.waitForTimeout(900);
-  const firstCard = await p.$$('.page .card');
-  console.log('student takeout status:', (await firstCard[0].innerText()).split('\n')[0], '| slot', slot);
+  console.log('student takeout status:', await p.innerText('.status-head h2'), '| slot', slot, '| proof:', !!(await p.$('.proof img')), '| ops:', (await p.$$eval('.ops .btn', (e) => e.map((x) => x.innerText))).join('/'));
+
+  // 领券中心抢券
+  await p.goto(`${BASE}/app/?as=student#/coupons`); await p.waitForTimeout(900);
+  const grab = await p.$('button:has-text("立即抢")');
+  if (grab) { await grab.click(); await p.waitForTimeout(700); }
+  console.log('claim toast:', await p.innerText('.toast').catch(() => '无'));
+
+  // 代取快递：接单人拍照送达
+  await p.goto(`${BASE}/app/?as=student#/errands/6`); await p.waitForTimeout(900);
+  await p.click('.action-bar .btn'); await p.waitForTimeout(300); await photo();
+  console.log('errand after deliver:', await p.innerText('.status-head h2'), '| proof:', !!(await p.$('.proof img')));
+
+  // 二手：确认收货
+  await p.goto(`${BASE}/app/?as=student#/market/orders`); await p.waitForTimeout(900);
+  const confirmBtn = await p.$('button:has-text("确认收货")');
+  if (confirmBtn) { await confirmBtn.click(); await p.waitForTimeout(300); await okDialog(); }
+  console.log('market trade:', (await p.innerText('.page .card')).split('\n').slice(0, 2).join(' '));
+
+  // 商家购买推荐位（第 3 位）
+  await p.goto(`${BASE}/app/?as=merchant#/m/promote`); await p.waitForTimeout(900);
+  const slots = await p.$$('.slot');
+  await slots[5].click(); await p.waitForTimeout(300); // 校园外卖行业第 3 位
+  await p.click('.action-bar .btn'); await p.waitForTimeout(300); await okDialog();
+  console.log('promo toast:', await p.innerText('.toast').catch(() => '无'));
 
   // 二手发布带图片
   await p.goto(`${BASE}/app/?as=student#/market/new`); await p.waitForTimeout(800);
-  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
   await p.setInputFiles('.pic.add input', { name: 'a.png', mimeType: 'image/png', buffer: png });
   await p.waitForTimeout(1500);
   console.log('uploaded pics:', (await p.$$('.pic img')).length);
+  await p.fill('.form textarea', '带图测试台灯');
   const mins = await p.$$('.form input:not([type=file])');
-  await mins[0].fill('带图测试台灯'); await mins[1].fill('20'); await mins[3].fill('wx123');
+  await mins[0].fill('20'); await mins[2].fill('wx123');
   await p.click('.action-bar .btn'); await p.waitForTimeout(900);
   console.log('market detail has gallery:', !!(await p.$('.gallery img')));
 

@@ -17,6 +17,8 @@ $r->get('/api/schools',               [C\SchoolController::class, 'list'], '');
 $r->post('/api/schools/apply',        [C\SchoolController::class, 'apply'], '');
 $r->get('/api/schools/{id}/config',   [C\SchoolController::class, 'config'], '');
 $r->get('/api/home',                  [C\HomeController::class, 'index']);
+$r->get('/api/config',                [C\HomeController::class, 'config'], '');
+$r->get('/api/wallet',                [C\WalletController::class, 'index']);
 
 // 板块一：校园基础业务
 $r->get('/api/errands',                    [C\ErrandController::class, 'list']);
@@ -29,6 +31,9 @@ $r->get('/api/market/mine',                [C\MarketController::class, 'mine']);
 $r->post('/api/market',                    [C\MarketController::class, 'create']);
 $r->get('/api/market/{id}',                [C\MarketController::class, 'show']);
 $r->post('/api/market/{id}/status',        [C\MarketController::class, 'setStatus']);
+$r->post('/api/market/{id}/buy',           [C\MarketController::class, 'buy']);
+$r->get('/api/market-orders',              [C\MarketController::class, 'orders']);
+$r->post('/api/market-orders/{id}/{action}', [C\MarketController::class, 'orderAction']);
 $r->get('/api/treehole',                   [C\TreeholeController::class, 'list']);
 $r->post('/api/treehole',                  [C\TreeholeController::class, 'create']);
 $r->post('/api/treehole/{id}/like',        [C\TreeholeController::class, 'like']);
@@ -41,6 +46,11 @@ $r->post('/api/upload',                    [C\UploadController::class, 'image'])
 $r->get('/api/local/merchants',        [C\LocalController::class, 'merchants']);
 $r->get('/api/local/merchants/{id}',   [C\LocalController::class, 'merchant']);
 $r->get('/api/local/deals/{id}',       [C\LocalController::class, 'deal']);
+$r->get('/api/local/recommend',        [C\LocalController::class, 'recommend']);
+$r->get('/api/coupons/today',          [C\CouponController::class, 'today']);
+$r->get('/api/coupons/mine',           [C\CouponController::class, 'mine']);
+$r->get('/api/coupons/usable',         [C\CouponController::class, 'usable']);
+$r->post('/api/coupons/{id}/claim',    [C\CouponController::class, 'claim']);
 $r->post('/api/orders',                [C\OrderController::class, 'create']);
 $r->get('/api/orders',                 [C\OrderController::class, 'mine']);
 $r->get('/api/orders/{id}',            [C\OrderController::class, 'show']);
@@ -60,6 +70,8 @@ $r->post('/api/merchant/deals/{id}/toggle',    [C\MerchantController::class, 'to
 $r->get('/api/merchant/orders',                [C\MerchantController::class, 'orders'], 'merchant');
 $r->post('/api/merchant/orders/{id}/advance',  [C\MerchantController::class, 'advance'], 'merchant');
 $r->post('/api/merchant/verify',               [C\MerchantController::class, 'verify'], 'merchant');
+$r->get('/api/merchant/promotions',            [C\MerchantController::class, 'promotions'], 'merchant');
+$r->post('/api/merchant/promotions',           [C\MerchantController::class, 'buyPromotion'], 'merchant');
 
 // 客户经理端
 $r->get('/api/manager/dashboard',                  [C\ManagerController::class, 'dashboard'], 'manager');
@@ -97,6 +109,13 @@ $r->post('/api/admin/faqs/{id}/delete',          [C\AdminController::class, 'del
 $r->get('/api/admin/ai-logs',                    [C\AdminController::class, 'aiLogs'], 'admin');
 $r->get('/api/admin/treehole',                   [C\AdminController::class, 'treehole'], 'admin');
 $r->post('/api/admin/treehole/{id}/{action}',    [C\AdminController::class, 'moderatePost'], 'admin');
+$r->get('/api/admin/revenue',                    [C\AdminController::class, 'revenue'], 'admin');
+$r->get('/api/admin/promotions',                 [C\AdminController::class, 'promotions'], 'admin');
+$r->post('/api/admin/promotions',                [C\AdminController::class, 'createPromotion'], 'admin');
+$r->post('/api/admin/promotions/{id}/{action}',  [C\AdminController::class, 'promotionAction'], 'admin');
+$r->get('/api/admin/coupons',                    [C\AdminController::class, 'coupons'], 'admin');
+$r->post('/api/admin/coupons',                   [C\AdminController::class, 'saveCoupon'], 'admin');
+$r->post('/api/admin/coupons/{id}',              [C\AdminController::class, 'saveCoupon'], 'admin');
 
 // AI 问答（预留，当前 FAQ 兜底）
 $r->post('/api/ai/ask', [C\AiController::class, 'ask'], '');
